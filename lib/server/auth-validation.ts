@@ -7,7 +7,7 @@ export function isValidEmail(email: string) {
 export function validatePassword(password: string) {
   const failures: string[] = [];
 
-  if (password.length < 10) failures.push("Use at least 10 characters.");
+  if (password.length < 8) failures.push("Use at least 8 characters.");
   if (!/[A-Z]/.test(password)) failures.push("Add one uppercase letter.");
   if (!/[a-z]/.test(password)) failures.push("Add one lowercase letter.");
   if (!/[0-9]/.test(password)) failures.push("Add one number.");

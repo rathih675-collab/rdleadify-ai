@@ -5,11 +5,14 @@ import { LogIn } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
+import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
 
-export default function LoginForm() {
+export default function LoginForm({ successMessage = "" }: { successMessage?: string }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -23,6 +26,8 @@ export default function LoginForm() {
       body: JSON.stringify({
         email: form.get("email"),
         password: form.get("password"),
+        rememberMe,
+        captchaToken,
       }),
     });
 
@@ -51,6 +56,9 @@ export default function LoginForm() {
       </div>
 
       {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
+      {successMessage ? (
+        <AuthNotice tone="success">{successMessage}</AuthNotice>
+      ) : null}
 
       <Field label="Email" name="email" type="email" autoComplete="email" required />
       <PasswordField
@@ -60,13 +68,23 @@ export default function LoginForm() {
         required
       />
 
-      <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center justify-between gap-4 text-sm">
+        <label className="flex items-center gap-2 text-slate-300">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(event) => setRememberMe(event.target.checked)}
+            className="h-4 w-4 rounded border-white/20 bg-white/10 accent-emerald-400"
+          />
+          Remember me
+        </label>
         <Link href="/forgot-password" className="font-medium text-emerald-300 hover:text-emerald-200">
           Forgot password?
         </Link>
       </div>
+      <Turnstile onVerify={setCaptchaToken} />
 
-      <Button type="submit" className="w-full" disabled={loading}>
+      <Button type="submit" className="w-full" disabled={loading || !captchaToken}>
         <LogIn className="h-4 w-4" />
         {loading ? "Signing in..." : "Login"}
       </Button>

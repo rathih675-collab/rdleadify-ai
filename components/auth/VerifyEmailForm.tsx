@@ -1,17 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { BadgeCheck } from "lucide-react";
+import { BadgeCheck, RefreshCw } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field } from "@/components/auth/AuthFields";
 import { Button } from "@/components/ui/button";
 
-export default function VerifyEmailForm({ initialToken = "" }: { initialToken?: string }) {
+export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: string }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [token, setToken] = useState(initialToken);
+  const [email, setEmail] = useState(initialEmail);
+  const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -19,11 +21,10 @@ export default function VerifyEmailForm({ initialToken = "" }: { initialToken?: 
     setNotice("");
     setLoading(true);
 
-    const form = new FormData(event.currentTarget);
     const response = await fetch("/api/auth/verify-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: form.get("token") }),
+      body: JSON.stringify({ email, otp }),
     });
 
     const data = await response.json();
@@ -34,18 +35,40 @@ export default function VerifyEmailForm({ initialToken = "" }: { initialToken?: 
       return;
     }
 
-    setNotice(data.message ?? "Email verified successfully.");
+    window.location.assign("/login?verified=1");
+  }
+
+  async function resendOtp() {
+    setError("");
+    setNotice("");
+    setResending(true);
+
+    const response = await fetch("/api/auth/resend-verification-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await response.json();
+    setResending(false);
+
+    if (!response.ok) {
+      setError(data.error ?? "Unable to resend OTP.");
+      return;
+    }
+
+    setNotice(data.message ?? "A new OTP has been sent.");
   }
 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
       <div>
         <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
-          Email verification
+          Email OTP verification
         </p>
-        <h1 className="mt-2 text-2xl font-bold text-white">Verify email</h1>
+        <h1 className="mt-2 text-2xl font-bold text-white">Verify your email</h1>
         <p className="mt-2 text-sm leading-6 text-slate-400">
-          Activate secure login for your RDLeadify workspace.
+          Enter the 6 digit OTP sent to your inbox. It expires in 10 minutes.
         </p>
       </div>
 
@@ -53,17 +76,42 @@ export default function VerifyEmailForm({ initialToken = "" }: { initialToken?: 
       {notice ? <AuthNotice tone="success">{notice}</AuthNotice> : null}
 
       <Field
-        label="Verification token"
-        name="token"
-        value={token}
-        onChange={(event) => setToken(event.target.value)}
+        label="Email"
+        name="email"
+        type="email"
+        autoComplete="email"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        required
+      />
+      <Field
+        label="6 digit OTP"
+        name="otp"
+        inputMode="numeric"
+        pattern="[0-9]{6}"
+        maxLength={6}
+        value={otp}
+        onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+        className="text-center font-mono text-xl tracking-[0.5em]"
         required
       />
 
-      <Button type="submit" className="w-full" disabled={loading}>
-        <BadgeCheck className="h-4 w-4" />
-        {loading ? "Verifying..." : "Verify email"}
-      </Button>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Button type="submit" className="w-full" disabled={loading}>
+          <BadgeCheck className="h-4 w-4" />
+          {loading ? "Verifying..." : "Verify"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={resendOtp}
+          disabled={resending || !email}
+        >
+          <RefreshCw className="h-4 w-4" />
+          {resending ? "Sending..." : "Resend OTP"}
+        </Button>
+      </div>
 
       <p className="text-center text-sm text-slate-400">
         Ready to continue?{" "}

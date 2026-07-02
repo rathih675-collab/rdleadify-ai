@@ -21,14 +21,14 @@ function getJwtSecret() {
   return new TextEncoder().encode(secret ?? "rdleadify-ai-local-development-secret");
 }
 
-export async function signSessionToken(payload: SessionPayload) {
+export async function signSessionToken(payload: SessionPayload, expiresIn = "7d") {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(issuer)
     .setAudience(audience)
     .setSubject(payload.userId)
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime(expiresIn)
     .sign(getJwtSecret());
 }
 
@@ -58,12 +58,16 @@ export function addHours(hours: number) {
   return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
-export function sessionCookieOptions() {
+export function addMinutes(minutes: number) {
+  return new Date(Date.now() + minutes * 60 * 1000);
+}
+
+export function sessionCookieOptions(maxAge = 60 * 60 * 24 * 7) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge,
   };
 }

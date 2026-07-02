@@ -29,22 +29,31 @@ function requiredRolesFor(pathname: string) {
   return match?.[1];
 }
 
+function withSecurityHeaders(response: NextResponse) {
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  response.headers.set("X-XSS-Protection", "0");
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
 
   if (isPublicPath(pathname)) {
     if (token && ["/login", "/register"].includes(pathname)) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
+      return withSecurityHeaders(NextResponse.redirect(new URL("/dashboard", request.url)));
     }
 
-    return NextResponse.next();
+    return withSecurityHeaders(NextResponse.next());
   }
 
   if (!token) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(loginUrl);
+    return withSecurityHeaders(NextResponse.redirect(loginUrl));
   }
 
   try {
@@ -57,20 +66,20 @@ export async function proxy(request: NextRequest) {
     const role = String(payload.role ?? "");
 
     if (allowedRoles && !allowedRoles.includes(role)) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
+      return withSecurityHeaders(NextResponse.redirect(new URL("/dashboard", request.url)));
     }
 
     const response = NextResponse.next();
     response.headers.set("x-rdleadify-user-id", String(payload.userId ?? ""));
     response.headers.set("x-rdleadify-workspace-id", String(payload.workspaceId ?? ""));
     response.headers.set("x-rdleadify-role", role);
-    return response;
+    return withSecurityHeaders(response);
   } catch {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", pathname);
     const response = NextResponse.redirect(loginUrl);
     response.cookies.set(AUTH_COOKIE_NAME, "", { path: "/", maxAge: 0 });
-    return response;
+    return withSecurityHeaders(response);
   }
 }
 

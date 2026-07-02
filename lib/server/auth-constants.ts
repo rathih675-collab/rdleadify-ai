@@ -1,4 +1,5 @@
 export const AUTH_COOKIE_NAME = "rdleadify_session";
+export const REFRESH_COOKIE_NAME = "rdleadify_refresh";
 
 export const publicRoutes = [
   "/",
@@ -7,6 +8,8 @@ export const publicRoutes = [
   "/forgot-password",
   "/reset-password",
   "/verify-email",
+  "/privacy",
+  "/terms",
 ];
 
 export const roleAccess: Record<string, string[]> = {

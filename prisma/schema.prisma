@@ -113,6 +113,8 @@ model Workspace {
   activityLogs     ActivityLog[]
   passwordResetTokens PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
+  sessions AuthSession[]
+  refreshTokens RefreshToken[]
 }
 
 model User {
@@ -131,6 +133,10 @@ model User {
   isActive    Boolean  @default(true)
   emailVerifiedAt DateTime?
   lastLoginAt DateTime?
+  failedLoginAttempts Int @default(0)
+  lockedUntil DateTime?
+  lastLoginIp String?
+  lastLoginUserAgent String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   role      Role?     @relation(fields: [roleId], references: [id], onDelete: SetNull)
@@ -142,6 +148,8 @@ model User {
   activityLogs  ActivityLog[]
   passwordResetTokens PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
+  sessions AuthSession[]
+  refreshTokens RefreshToken[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId])
@@ -158,6 +166,7 @@ model PasswordResetToken {
   tokenHash   String   @unique
   expiresAt   DateTime
   usedAt      DateTime?
+  attempts    Int      @default(0)
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -177,12 +186,55 @@ model EmailVerificationToken {
   tokenHash   String   @unique
   expiresAt   DateTime
   usedAt      DateTime?
+  attempts    Int      @default(0)
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
   @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId      String
+  workspaceId String
+  refreshTokenHash String @unique
+  ipAddress   String?
+  userAgent   String?
+  device      String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastSeenAt  DateTime?
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([workspaceId])
+  @@index([expiresAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId      String
+  workspaceId String
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([workspaceId])
   @@index([expiresAt])
 }
 
