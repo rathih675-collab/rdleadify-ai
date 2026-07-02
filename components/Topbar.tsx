@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Moon, Plus, Search, UserRound } from "lucide-react";
+import { Bell, LogOut, Moon, Plus, Search, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -13,6 +13,11 @@ export default function Topbar({
   eyebrow = "Dashboard",
   title = "Revenue Command Center",
 }: TopbarProps) {
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/login");
+  }
+
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#07111f]/95 px-4 py-4 backdrop-blur md:px-6 lg:px-8">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -55,6 +60,15 @@ export default function Topbar({
                   Sales Ops
                 </span>
               </span>
+            </Button>
+
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="Logout"
+              onClick={logout}
+            >
+              <LogOut className="h-4 w-4" />
             </Button>
           </div>
         </div>
