@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LogIn } from "lucide-react";
+import { Loader2, LogIn } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
@@ -84,8 +84,8 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
       </div>
       <Turnstile onVerify={setCaptchaToken} />
 
-      <Button type="submit" className="w-full" disabled={loading || !captchaToken}>
-        <LogIn className="h-4 w-4" />
+      <Button type="submit" className="w-full" disabled={loading}>
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
         {loading ? "Signing in..." : "Login"}
       </Button>
 

@@ -6,6 +6,7 @@ import { AUTH_COOKIE_NAME, REFRESH_COOKIE_NAME } from "@/lib/server/auth-constan
 import { isValidEmail, normalizeEmail } from "@/lib/server/auth-validation";
 import { jsonError, readJson } from "@/lib/server/api";
 import { enforceCaptcha } from "@/lib/server/captcha";
+import { authLog } from "@/lib/server/dev-log";
 import { verifyPassword } from "@/lib/server/password";
 import { prisma } from "@/lib/server/prisma";
 import { rateLimit } from "@/lib/server/rate-limit";
@@ -20,13 +21,18 @@ type LoginBody = {
 };
 
 export async function POST(request: NextRequest) {
+  authLog("login route hit");
   const body = await readJson<LoginBody>(request);
-  if (!body) return jsonError("Invalid request body.");
+  if (!body) {
+    authLog("login validation failed", { reason: "invalid_body" });
+    return jsonError("Invalid request body.");
+  }
 
   const ip = getClientIp(request);
   const userAgent = getUserAgent(request);
   const limit = rateLimit(`login:${ip}`, 10, 10 * 60 * 1000);
   if (!limit.allowed) {
+    authLog("login validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many login attempts. Try again in ${limit.retryAfter} seconds.`, 429);
   }
 
@@ -37,6 +43,7 @@ export async function POST(request: NextRequest) {
   const password = body.password ?? "";
 
   if (!isValidEmail(email) || !password) {
+    authLog("login validation failed", { reason: "invalid_credentials_shape" });
     return jsonError("Invalid email or password.", 401);
   }
 
@@ -57,10 +64,12 @@ export async function POST(request: NextRequest) {
   });
 
   if (!user) {
+    authLog("login validation failed", { reason: "user_not_found", email });
     return jsonError("Invalid email or password.", 401);
   }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
+    authLog("login validation failed", { reason: "account_locked", userId: user.id });
     return jsonError("Account is temporarily locked after multiple failed attempts. Try again later.", 423);
   }
 
@@ -74,6 +83,7 @@ export async function POST(request: NextRequest) {
           failedLoginAttempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null,
       },
     });
+    authLog("login validation failed", { reason: "bad_password", userId: user.id, failedLoginAttempts });
 
     return jsonError(
       failedLoginAttempts >= 5
@@ -84,10 +94,12 @@ export async function POST(request: NextRequest) {
   }
 
   if (!user.isActive) {
+    authLog("login validation failed", { reason: "inactive_account", userId: user.id });
     return jsonError("This account is inactive.", 403);
   }
 
   if (!user.emailVerifiedAt) {
+    authLog("login validation failed", { reason: "email_unverified", userId: user.id });
     return jsonError("Please verify your email.", 403);
   }
 
@@ -135,6 +147,7 @@ export async function POST(request: NextRequest) {
       },
     }),
   ]);
+  authLog("login database update success", { userId: user.id, rememberMe });
 
   const response = NextResponse.json({
     message: "Signed in successfully.",

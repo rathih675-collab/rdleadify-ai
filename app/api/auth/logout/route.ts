@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { AUTH_COOKIE_NAME, REFRESH_COOKIE_NAME } from "@/lib/server/auth-constants";
+import { authLog } from "@/lib/server/dev-log";
 import { prisma } from "@/lib/server/prisma";
 import { hashOpaqueToken } from "@/lib/server/tokens";
 
 export async function POST() {
+  authLog("logout route hit");
   const refreshToken = (await cookies()).get(REFRESH_COOKIE_NAME)?.value;
   if (refreshToken) {
     await prisma.$transaction([
@@ -18,6 +20,7 @@ export async function POST() {
         data: { revokedAt: new Date() },
       }),
     ]);
+    authLog("logout database update success");
   }
 
   const response = NextResponse.json({ message: "Signed out successfully." });

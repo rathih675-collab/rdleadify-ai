@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { MailCheck } from "lucide-react";
+import { Loader2, MailCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field } from "@/components/auth/AuthFields";
 import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
+import { canShowDevOtp } from "@/lib/auth-client";
 
 export default function ForgotPasswordForm() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [devOtp, setDevOtp] = useState("");
+  const [submittedEmail, setSubmittedEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [captchaToken, setCaptchaToken] = useState("");
 
@@ -18,13 +21,15 @@ export default function ForgotPasswordForm() {
     event.preventDefault();
     setError("");
     setNotice("");
+    setDevOtp("");
     setLoading(true);
 
     const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "");
     const response = await fetch("/api/auth/forgot-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: form.get("email"), captchaToken }),
+      body: JSON.stringify({ email, captchaToken }),
     });
 
     const data = await response.json();
@@ -36,8 +41,12 @@ export default function ForgotPasswordForm() {
     }
 
     setNotice(data.message ?? "Password reset OTP sent.");
+    setSubmittedEmail(String(data.email ?? email));
+    setDevOtp(!data.emailSent && canShowDevOtp() ? String(data.devOtp ?? "") : "");
     if (data.email) {
-      window.location.assign(`/reset-password?email=${encodeURIComponent(String(data.email))}`);
+      if (data.emailSent || !data.devOtp || !canShowDevOtp()) {
+        window.location.assign(`/reset-password?email=${encodeURIComponent(String(data.email))}`);
+      }
     }
   }
 
@@ -55,12 +64,24 @@ export default function ForgotPasswordForm() {
 
       {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
       {notice ? <AuthNotice tone="success">{notice}</AuthNotice> : null}
+      {devOtp ? (
+        <AuthNotice tone="info">
+          Development reset OTP:{" "}
+          <span className="font-mono font-bold tracking-widest">{devOtp}</span>
+          <Link
+            href={`/reset-password?email=${encodeURIComponent(submittedEmail)}`}
+            className="mt-2 block font-semibold text-sky-100 underline"
+          >
+            Continue to password reset
+          </Link>
+        </AuthNotice>
+      ) : null}
 
       <Field label="Email" name="email" type="email" autoComplete="email" required />
       <Turnstile onVerify={setCaptchaToken} />
 
-      <Button type="submit" className="w-full" disabled={loading || !captchaToken}>
-        <MailCheck className="h-4 w-4" />
+      <Button type="submit" className="w-full" disabled={loading}>
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}
         {loading ? "Preparing..." : "Send reset link"}
       </Button>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
@@ -113,8 +113,8 @@ export default function ResetPasswordForm({ initialEmail = "" }: { initialEmail?
       />
       <Turnstile onVerify={setCaptchaToken} />
 
-      <Button type="submit" className="w-full" disabled={loading || !captchaToken}>
-        <KeyRound className="h-4 w-4" />
+      <Button type="submit" className="w-full" disabled={loading}>
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
         {loading ? "Resetting..." : "Reset password"}
       </Button>
 

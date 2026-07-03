@@ -1,17 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { UserPlus } from "lucide-react";
+import { Loader2, UserPlus } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
 import PasswordStrength, { passwordScore } from "@/components/auth/PasswordStrength";
 import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
+import { canShowDevOtp } from "@/lib/auth-client";
 
 export default function RegisterForm() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [devOtp, setDevOtp] = useState("");
+  const [submittedEmail, setSubmittedEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [password, setPassword] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -23,11 +26,25 @@ export default function RegisterForm() {
     const form = event.currentTarget;
     setError("");
     setNotice("");
+    setDevOtp("");
     setLoading(true);
 
     const formData = new FormData(form);
     const currentPassword = String(formData.get("password") ?? "");
     const confirmPassword = String(formData.get("confirmPassword") ?? "");
+    const email = String(formData.get("email") ?? "");
+
+    if (!acceptedTerms || !acceptedPrivacy) {
+      setError("Please accept the Terms of Service and Privacy Policy.");
+      setLoading(false);
+      return;
+    }
+
+    if (!captchaToken) {
+      setError("Complete the captcha challenge to continue.");
+      setLoading(false);
+      return;
+    }
 
     if (currentPassword !== confirmPassword) {
       setError("Passwords do not match.");
@@ -46,7 +63,7 @@ export default function RegisterForm() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: formData.get("name"),
-        email: formData.get("email"),
+        email,
         workspaceName: formData.get("workspaceName"),
         password: currentPassword,
         acceptedTerms,
@@ -64,9 +81,13 @@ export default function RegisterForm() {
     }
 
     setNotice(data.message ?? "Account created.");
+    setSubmittedEmail(String(data.email ?? email));
+    setDevOtp(!data.emailSent && canShowDevOtp() ? String(data.devOtp ?? "") : "");
     setPassword("");
     form.reset();
-    window.location.assign(`/verify-email?email=${encodeURIComponent(String(data.email ?? ""))}`);
+    if (data.emailSent || !data.devOtp || !canShowDevOtp()) {
+      window.location.assign(`/verify-email?email=${encodeURIComponent(String(data.email ?? email))}`);
+    }
   }
 
   return (
@@ -83,6 +104,17 @@ export default function RegisterForm() {
 
       {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
       {notice ? <AuthNotice tone="success">{notice}</AuthNotice> : null}
+      {devOtp ? (
+        <AuthNotice tone="info">
+          Development OTP: <span className="font-mono font-bold tracking-widest">{devOtp}</span>
+          <Link
+            href={`/verify-email?email=${encodeURIComponent(submittedEmail)}`}
+            className="mt-2 block font-semibold text-sky-100 underline"
+          >
+            Continue to OTP verification
+          </Link>
+        </AuthNotice>
+      ) : null}
 
       <Field label="Full name" name="name" autoComplete="name" required />
       <Field label="Work email" name="email" type="email" autoComplete="email" required />
@@ -139,9 +171,9 @@ export default function RegisterForm() {
       <Button
         type="submit"
         className="w-full"
-        disabled={loading || !acceptedTerms || !acceptedPrivacy || !captchaToken}
+        disabled={loading}
       >
-        <UserPlus className="h-4 w-4" />
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
         {loading ? "Creating account..." : "Register"}
       </Button>
 

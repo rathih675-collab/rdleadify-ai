@@ -77,6 +77,8 @@ type HealthMetric = {
   variant: BadgeVariant;
 };
 
+const numberFormatter = new Intl.NumberFormat("en-US");
+
 const kpis: PipelineKpi[] = [
   {
     label: "Pipeline Value",
@@ -408,7 +410,7 @@ function KanbanColumn({ stage }: { stage: Stage }) {
           <Badge variant={stage.variant}>{stage.deals.length}</Badge>
         </div>
         <p className="mt-3 text-sm font-semibold text-emerald-300">
-          ${totalValue.toLocaleString()}
+          ${numberFormatter.format(totalValue)}
         </p>
       </div>
 

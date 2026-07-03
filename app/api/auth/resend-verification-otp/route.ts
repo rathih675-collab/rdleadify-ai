@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 
-import { sendVerificationOtpEmail } from "@/lib/email";
+import { sendVerificationOtpEmail, shouldExposeDevOtp } from "@/lib/email";
 import { jsonError, readJson } from "@/lib/server/api";
 import { isValidEmail, normalizeEmail } from "@/lib/server/auth-validation";
+import { authLog } from "@/lib/server/dev-log";
 import { createOtp, hashOtp } from "@/lib/server/otp";
 import { prisma } from "@/lib/server/prisma";
 import { rateLimit } from "@/lib/server/rate-limit";
@@ -14,17 +15,25 @@ type ResendOtpBody = {
 };
 
 export async function POST(request: NextRequest) {
+  authLog("resend verification otp route hit");
   const body = await readJson<ResendOtpBody>(request);
-  if (!body) return jsonError("Invalid request body.");
+  if (!body) {
+    authLog("resend otp validation failed", { reason: "invalid_body" });
+    return jsonError("Invalid request body.");
+  }
 
   const ip = getClientIp(request);
   const limit = rateLimit(`resend-email-otp:${ip}`, 5, 10 * 60 * 1000);
   if (!limit.allowed) {
+    authLog("resend otp validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many OTP requests. Try again in ${limit.retryAfter} seconds.`, 429);
   }
 
   const email = normalizeEmail(body.email ?? "");
-  if (!isValidEmail(email)) return jsonError("Enter a valid email address.");
+  if (!isValidEmail(email)) {
+    authLog("resend otp validation failed", { reason: "invalid_email" });
+    return jsonError("Enter a valid email address.");
+  }
 
   const user = await prisma.user.findFirst({
     where: { email, isActive: true },
@@ -52,7 +61,14 @@ export async function POST(request: NextRequest) {
   });
 
   if (!emailResult.sent) {
-    return jsonError("Verification email could not be sent.", 503);
+    authLog("resend otp email send fail", {
+      email,
+      reason: emailResult.reason,
+      devOtp: shouldExposeDevOtp(emailResult) ? otp : undefined,
+    });
+    if (process.env.NODE_ENV === "production") {
+      return jsonError("Verification email could not be sent.", 503);
+    }
   }
 
   await prisma.$transaction([
@@ -70,6 +86,16 @@ export async function POST(request: NextRequest) {
       },
     }),
   ]);
+  authLog("resend otp database update success", { userId: user.id, email });
+  const exposeDevOtp = shouldExposeDevOtp(emailResult);
 
-  return Response.json({ message: "A new OTP has been sent." });
+  return Response.json({
+    message: emailResult.sent
+      ? "OTP sent to your email. Please check your inbox."
+      : exposeDevOtp
+        ? "Email is not configured. Use the development OTP below."
+        : "Email delivery failed. Please try again.",
+    emailSent: emailResult.sent,
+    devOtp: exposeDevOtp ? otp : undefined,
+  });
 }

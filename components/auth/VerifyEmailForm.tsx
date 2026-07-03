@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { BadgeCheck, RefreshCw } from "lucide-react";
+import { BadgeCheck, Loader2, RefreshCw } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field } from "@/components/auth/AuthFields";
 import { Button } from "@/components/ui/button";
+import { canShowDevOtp } from "@/lib/auth-client";
 
 export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: string }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [devOtp, setDevOtp] = useState("");
   const [email, setEmail] = useState(initialEmail);
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
@@ -21,7 +23,7 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
     setNotice("");
     setLoading(true);
 
-    const response = await fetch("/api/auth/verify-email", {
+    const response = await fetch("/api/auth/verify-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, otp }),
@@ -41,9 +43,10 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
   async function resendOtp() {
     setError("");
     setNotice("");
+    setDevOtp("");
     setResending(true);
 
-    const response = await fetch("/api/auth/resend-verification-otp", {
+    const response = await fetch("/api/auth/resend-otp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -57,7 +60,8 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
       return;
     }
 
-    setNotice(data.message ?? "A new OTP has been sent.");
+    setNotice(data.message ?? "OTP sent to your email. Please check your inbox.");
+    setDevOtp(!data.emailSent && canShowDevOtp() ? String(data.devOtp ?? "") : "");
   }
 
   return (
@@ -74,6 +78,11 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
 
       {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
       {notice ? <AuthNotice tone="success">{notice}</AuthNotice> : null}
+      {devOtp ? (
+        <AuthNotice tone="info">
+          Development OTP: <span className="font-mono font-bold tracking-widest">{devOtp}</span>
+        </AuthNotice>
+      ) : null}
 
       <Field
         label="Email"
@@ -98,7 +107,7 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Button type="submit" className="w-full" disabled={loading}>
-          <BadgeCheck className="h-4 w-4" />
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgeCheck className="h-4 w-4" />}
           {loading ? "Verifying..." : "Verify"}
         </Button>
         <Button
@@ -106,9 +115,9 @@ export default function VerifyEmailForm({ initialEmail = "" }: { initialEmail?: 
           variant="outline"
           className="w-full"
           onClick={resendOtp}
-          disabled={resending || !email}
+          disabled={resending}
         >
-          <RefreshCw className="h-4 w-4" />
+          {resending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           {resending ? "Sending..." : "Resend OTP"}
         </Button>
       </div>

@@ -9,6 +9,14 @@ type SendEmailResult =
   | { sent: true }
   | { sent: false; reason: "missing_config" | "failed" };
 
+export function shouldExposeDevOtp(result: SendEmailResult) {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.ENABLE_DEV_OTP_UI === "true" &&
+    !result.sent
+  );
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -25,6 +33,11 @@ export async function sendVerificationOtpEmail({
   purpose = "verify",
 }: SendVerificationOtpEmailInput): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail =
+    process.env.RESEND_FROM_EMAIL ??
+    process.env.FROM_EMAIL ??
+    process.env.EMAIL_FROM ??
+    "RDLeadify AI <onboarding@resend.dev>";
 
   if (!apiKey) {
     return { sent: false, reason: "missing_config" };
@@ -47,7 +60,7 @@ export async function sendVerificationOtpEmail({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: process.env.RESEND_FROM_EMAIL ?? "RDLeadify AI <onboarding@resend.dev>",
+      from: fromEmail,
       to,
       subject: isReset
         ? "Reset your RDLeadify AI password"

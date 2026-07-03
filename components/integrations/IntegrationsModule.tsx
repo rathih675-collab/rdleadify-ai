@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -62,6 +65,34 @@ type MonitorItem = {
   value: number;
   helper: string;
   variant: BadgeVariant;
+};
+
+type GoogleDemoStatus = "Not Connected" | "Connected" | "Demo Mode";
+
+type SheetLog = {
+  id: string;
+  status: string;
+  payload: unknown;
+  response?: unknown;
+  createdAt: string;
+};
+
+type CalendarLog = {
+  id: string;
+  title: string;
+  status: string;
+  startTime: string;
+  attendeeEmail?: string | null;
+  attendeePhone?: string | null;
+  response?: unknown;
+  createdAt: string;
+};
+
+type GoogleLogResponse<T> = {
+  logs?: T[];
+  demoMode?: boolean;
+  mode?: "DEMO" | "REAL_OAUTH_PENDING";
+  missingCredentials?: string[];
 };
 
 const kpis: Kpi[] = [
@@ -241,6 +272,103 @@ function SyncBar({ item }: { item: MonitorItem }) {
 }
 
 export default function IntegrationsModule() {
+  const [googleStatus, setGoogleStatus] = useState<GoogleDemoStatus>("Demo Mode");
+  const [sheetLogs, setSheetLogs] = useState<SheetLog[]>([]);
+  const [calendarLogs, setCalendarLogs] = useState<CalendarLog[]>([]);
+  const [missingCredentials, setMissingCredentials] = useState<string[]>([]);
+  const [toast, setToast] = useState("");
+  const [isTesting, setIsTesting] = useState(false);
+
+  async function loadGoogleLogs() {
+    try {
+      const [sheetResponse, calendarResponse] = await Promise.all([
+        fetch("/api/integrations/google/sheets/sync"),
+        fetch("/api/integrations/google/calendar/book"),
+      ]);
+
+      if (sheetResponse.ok) {
+        const data = (await sheetResponse.json()) as GoogleLogResponse<SheetLog>;
+        setSheetLogs(data.logs ?? []);
+        setMissingCredentials(data.missingCredentials ?? []);
+        setGoogleStatus(data.demoMode ? "Demo Mode" : "Connected");
+      }
+
+      if (calendarResponse.ok) {
+        const data = (await calendarResponse.json()) as GoogleLogResponse<CalendarLog>;
+        setCalendarLogs(data.logs ?? []);
+        setMissingCredentials(data.missingCredentials ?? []);
+        setGoogleStatus(data.demoMode ? "Demo Mode" : "Connected");
+      }
+    } catch {
+      setGoogleStatus("Demo Mode");
+    }
+  }
+
+  useEffect(() => {
+    void loadGoogleLogs();
+  }, []);
+
+  async function testSheetSync() {
+    setIsTesting(true);
+    setToast("");
+    try {
+      const response = await fetch("/api/integrations/google/sheets/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "Integrations Demo",
+          lead: {
+            name: "Demo Lead",
+            email: "demo@rdleadify.ai",
+            phone: "+91 90000 00000",
+            requirement: "AI CRM and Google Sheets sync",
+            budget: "75000 INR",
+          },
+        }),
+      });
+      const data = (await response.json()) as { message?: string; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Sheet sync failed.");
+      setToast(data.message ?? "Demo sync completed");
+      await loadGoogleLogs();
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Sheet sync failed.");
+    } finally {
+      setIsTesting(false);
+    }
+  }
+
+  async function testCalendarBooking() {
+    setIsTesting(true);
+    setToast("");
+    try {
+      const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const end = new Date(start.getTime() + 30 * 60 * 1000);
+      const response = await fetch("/api/integrations/google/calendar/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "RDLeadify AI demo appointment",
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          attendeeEmail: "demo@rdleadify.ai",
+          attendeePhone: "+91 90000 00000",
+          requirement: "AI CRM and calendar booking demo",
+        }),
+      });
+      const data = (await response.json()) as { message?: string; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Calendar booking failed.");
+      setToast(data.message ?? "Demo calendar booking completed");
+      await loadGoogleLogs();
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Calendar booking failed.");
+    } finally {
+      setIsTesting(false);
+    }
+  }
+
+  const lastSheetSync = sheetLogs[0]?.createdAt ? sheetLogs[0].createdAt.slice(0, 19).replace("T", " ") : "Never";
+  const lastCalendarBooking = calendarLogs[0]?.createdAt ? calendarLogs[0].createdAt.slice(0, 19).replace("T", " ") : "Never";
+
   return (
     <div className="flex min-h-screen bg-[#07111f] text-white">
       <Sidebar />
@@ -279,6 +407,128 @@ export default function IntegrationsModule() {
               </Button>
             </div>
           </div>
+
+          {toast ? (
+            <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-100">
+              {toast}
+            </div>
+          ) : null}
+
+          <Card className="border-emerald-500/20 bg-emerald-500/10">
+            <CardHeader>
+              <div>
+                <CardTitle>Google Workspace Demo</CardTitle>
+                <CardDescription>Push AI-qualified leads to Google Sheets and create Google Calendar bookings. Missing OAuth credentials automatically use Demo Mode.</CardDescription>
+              </div>
+              <Badge variant={googleStatus === "Connected" ? "success" : googleStatus === "Demo Mode" ? "warning" : "neutral"}>
+                {googleStatus}
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {googleStatus === "Demo Mode" ? (
+                <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
+                  Demo Mode is active because Google OAuth credentials are missing: {missingCredentials.length ? missingCredentials.join(", ") : "credentials not detected"}. Buttons still work and save database logs.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-sky-400/20 bg-sky-400/10 p-4 text-sm text-sky-100">
+                  Google OAuth credentials detected. Real provider adapter is ready to be connected; current route records a pending real-sync log.
+                </div>
+              )}
+              <div className="grid gap-4 lg:grid-cols-2">
+                <article className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
+                        <Table2 className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-white">Google Sheets</h3>
+                        <p className="mt-1 text-sm text-slate-400">Lead row sync for webinar demos and CRM exports.</p>
+                        <p className="mt-2 text-xs text-slate-500">Last Sync: {lastSheetSync}</p>
+                      </div>
+                    </div>
+                    <Badge variant={googleStatus === "Connected" ? "success" : "warning"}>{googleStatus}</Badge>
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Button variant="outline" onClick={() => setToast("Google OAuth connector is provider-ready. Add credentials to switch from Demo Mode.")}>
+                      <Plug className="h-4 w-4" />
+                      Connect Google
+                    </Button>
+                    <Button onClick={() => void testSheetSync()} disabled={isTesting}>
+                      <RefreshCw className="h-4 w-4" />
+                      Test Sheet Sync
+                    </Button>
+                  </div>
+                </article>
+
+                <article className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
+                        <CheckCircle2 className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-white">Google Calendar</h3>
+                        <p className="mt-1 text-sm text-slate-400">Book demo appointments from AI extracted lead info.</p>
+                        <p className="mt-2 text-xs text-slate-500">Last Booking: {lastCalendarBooking}</p>
+                      </div>
+                    </div>
+                    <Badge variant={googleStatus === "Connected" ? "success" : "warning"}>{googleStatus}</Badge>
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Button variant="outline" onClick={() => setToast("Google OAuth connector is provider-ready. Add credentials to switch from Demo Mode.")}>
+                      <Plug className="h-4 w-4" />
+                      Connect Google
+                    </Button>
+                    <Button onClick={() => void testCalendarBooking()} disabled={isTesting}>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Test Calendar Booking
+                    </Button>
+                  </div>
+                </article>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="font-semibold text-white">Latest Sheet Sync Logs</p>
+                    <Badge variant="neutral">{sheetLogs.length}</Badge>
+                  </div>
+                  <div className="space-y-3">
+                    {sheetLogs.length ? sheetLogs.slice(0, 4).map((log) => (
+                      <div key={log.id} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-white">{log.status}</p>
+                          <span className="text-xs text-slate-500">{log.createdAt.slice(0, 19).replace("T", " ")}</span>
+                        </div>
+                        <p className="mt-2 break-words text-xs text-slate-400">Payload: {JSON.stringify(log.payload ?? {}).slice(0, 160)}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">Response: {JSON.stringify(log.response ?? {}).slice(0, 160)}</p>
+                      </div>
+                    )) : <p className="text-sm text-slate-400">No Google Sheet sync logs yet. Run a test sync.</p>}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="font-semibold text-white">Latest Calendar Booking Logs</p>
+                    <Badge variant="neutral">{calendarLogs.length}</Badge>
+                  </div>
+                  <div className="space-y-3">
+                    {calendarLogs.length ? calendarLogs.slice(0, 4).map((log) => (
+                      <div key={log.id} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-white">{log.title}</p>
+                          <Badge variant={log.status.includes("BOOKED") ? "success" : "warning"}>{log.status}</Badge>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-400">{log.startTime.slice(0, 19).replace("T", " ")} | {log.attendeeEmail || log.attendeePhone || "No attendee"}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">Payload: {JSON.stringify({ title: log.title, attendeeEmail: log.attendeeEmail, attendeePhone: log.attendeePhone }).slice(0, 160)}</p>
+                      </div>
+                    )) : <p className="text-sm text-slate-400">No Google Calendar booking logs yet. Run a test booking.</p>}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
             {kpis.map((item) => (

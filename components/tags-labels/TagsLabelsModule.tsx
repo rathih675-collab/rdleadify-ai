@@ -59,6 +59,8 @@ type SuggestionGroup = {
   items: string[];
 };
 
+const numberFormatter = new Intl.NumberFormat("en-US");
+
 const kpis: Kpi[] = [
   {
     label: "Total Tags",
@@ -293,7 +295,7 @@ function TagCard({ item }: { item: TagItem }) {
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm text-slate-500">Usage count</span>
-          <span className="text-sm font-semibold text-white">{item.usageCount.toLocaleString()}</span>
+          <span className="text-sm font-semibold text-white">{numberFormatter.format(item.usageCount)}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm text-slate-500">Created by</span>

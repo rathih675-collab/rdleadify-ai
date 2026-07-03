@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-import { sendVerificationOtpEmail } from "@/lib/email";
+import { sendVerificationOtpEmail, shouldExposeDevOtp } from "@/lib/email";
 import { isValidEmail, normalizeEmail } from "@/lib/server/auth-validation";
 import { jsonError, readJson } from "@/lib/server/api";
 import { enforceCaptcha } from "@/lib/server/captcha";
+import { authLog } from "@/lib/server/dev-log";
 import { createOtp, hashOtp } from "@/lib/server/otp";
 import { prisma } from "@/lib/server/prisma";
 import { rateLimit } from "@/lib/server/rate-limit";
@@ -17,12 +18,17 @@ type ForgotPasswordBody = {
 };
 
 export async function POST(request: NextRequest) {
+  authLog("forgot password route hit");
   const body = await readJson<ForgotPasswordBody>(request);
-  if (!body) return jsonError("Invalid request body.");
+  if (!body) {
+    authLog("forgot password validation failed", { reason: "invalid_body" });
+    return jsonError("Invalid request body.");
+  }
 
   const ip = getClientIp(request);
   const limit = rateLimit(`forgot:${ip}`, 5, 10 * 60 * 1000);
   if (!limit.allowed) {
+    authLog("forgot password validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many reset requests. Try again in ${limit.retryAfter} seconds.`, 429);
   }
 
@@ -30,7 +36,10 @@ export async function POST(request: NextRequest) {
   if (captchaError) return captchaError;
 
   const email = normalizeEmail(body.email ?? "");
-  if (!isValidEmail(email)) return jsonError("Enter a valid email address.");
+  if (!isValidEmail(email)) {
+    authLog("forgot password validation failed", { reason: "invalid_email" });
+    return jsonError("Enter a valid email address.");
+  }
 
   const user = await prisma.user.findFirst({
     where: { email, isActive: true },
@@ -52,7 +61,14 @@ export async function POST(request: NextRequest) {
   });
 
   if (!emailResult.sent) {
-    return jsonError("Password reset email could not be sent.", 503);
+    authLog("forgot password email send fail", {
+      email,
+      reason: emailResult.reason,
+      devOtp: shouldExposeDevOtp(emailResult) ? otp : undefined,
+    });
+    if (process.env.NODE_ENV === "production") {
+      return jsonError("Password reset email could not be sent.", 503);
+    }
   }
 
   await prisma.$transaction([
@@ -68,9 +84,17 @@ export async function POST(request: NextRequest) {
       },
     }),
   ]);
+  authLog("forgot password database update success", { userId: user.id, email });
+  const exposeDevOtp = shouldExposeDevOtp(emailResult);
 
   return NextResponse.json({
-    message: "Password reset OTP sent. It expires in 10 minutes.",
+    message: emailResult.sent
+      ? "OTP sent to your email. Please check your inbox."
+      : exposeDevOtp
+        ? "Email is not configured. Use the development OTP below."
+        : "Email delivery failed. Please try again.",
     email,
+    emailSent: emailResult.sent,
+    devOtp: exposeDevOtp ? otp : undefined,
   });
 }

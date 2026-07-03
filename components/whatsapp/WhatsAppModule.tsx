@@ -592,14 +592,18 @@ export default function WhatsAppModule() {
           <div className="rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_30%),linear-gradient(135deg,rgba(15,23,42,0.98),rgba(2,6,23,0.98))] p-5 shadow-2xl shadow-black/30 sm:p-6">
             <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
-                <Badge variant="info">Enterprise WhatsApp operations</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="warning">Beta</Badge>
+                  <Badge variant="info">Enterprise WhatsApp operations</Badge>
+                </div>
                 <h1 className="mt-4 text-3xl font-bold tracking-tight text-white md:text-4xl">
                   WhatsApp Cloud API Management
                 </h1>
                 <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-400 md:text-base">
-                  Manage WABA health, phone numbers, live inbox, templates,
-                  broadcasts, flows, AI chatbot, AI voice, webhooks, API docs,
-                  analytics, and AI insights from one production-ready workspace.
+                  WhatsApp is currently a Beta module while AI Chat Agent and
+                  AI Voice Agent remain the priority demos. This page previews
+                  WABA health, inbox, templates, broadcasts, flows, webhooks,
+                  API docs, analytics, and AI insights.
                 </p>
               </div>
 
@@ -645,6 +649,11 @@ export default function WhatsAppModule() {
                       )}
                     >
                       {tab}
+                      {tab === "Dashboard" ? (
+                        <span className="ml-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+                          Beta
+                        </span>
+                      ) : null}
                     </button>
                   ))}
                 </div>

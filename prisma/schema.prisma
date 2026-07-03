@@ -80,6 +80,61 @@ enum AppointmentStatus {
   NO_SHOW
 }
 
+enum AIConversationChannel {
+  CHAT
+  VOICE
+}
+
+enum InboxChannel {
+  WHATSAPP
+  WEBSITE_CHAT
+  FACEBOOK_MESSENGER
+  INSTAGRAM
+  FACEBOOK_LEAD_ADS
+  LINKEDIN
+  EMAIL
+  VOICE_AGENT
+  API_WEBHOOK
+  MANUAL
+}
+
+enum InboxMessageType {
+  TEXT
+  IMAGE
+  PDF
+  AUDIO
+  VOICE
+  VIDEO
+  DOCUMENT
+  LOCATION
+  CONTACT
+  TEMPLATE
+}
+
+enum InboxSender {
+  CUSTOMER
+  AGENT
+  AI
+  SYSTEM
+  INTERNAL
+}
+
+enum InboxConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  LOST
+  SPAM
+}
+
+enum InboxMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
 model Workspace {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
@@ -95,6 +150,9 @@ model Workspace {
   roles            Role[]
   permissions      Permission[]
   leads            Lead[]
+  inboxConversations InboxConversation[]
+  googleSheetSyncLogs GoogleSheetSyncLog[]
+  calendarBookingLogs CalendarBookingLog[]
   contacts         Contact[]
   companies        Company[]
   tags             Tag[]
@@ -106,6 +164,10 @@ model Workspace {
   whatsAppAccounts WhatsAppAccount[]
   whatsAppMessages WhatsAppMessage[]
   aiAgents         AIAgent[]
+  aiConversationLogs AIConversationLog[]
+  automationWorkflows AutomationWorkflow[]
+  automationExecutionLogs AutomationExecutionLog[]
+  automationTemplates AutomationTemplate[]
   appointments     Appointment[]
   integrations     Integration[]
   apiKeys          ApiKey[]
@@ -142,10 +204,16 @@ model User {
   role      Role?     @relation(fields: [roleId], references: [id], onDelete: SetNull)
 
   assignedLeads Lead[]
+  assignedInboxConversations InboxConversation[]
+  inboxMessages InboxMessage[]
   assignedTasks Task[]
   appointments  Appointment[]
   apiKeys       ApiKey[]
   activityLogs  ActivityLog[]
+  aiConversationLogs AIConversationLog[]
+  automationWorkflows AutomationWorkflow[]
+  automationExecutionLogs AutomationExecutionLog[]
+  automationTemplates AutomationTemplate[]
   passwordResetTokens PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
   sessions AuthSession[]
@@ -290,6 +358,10 @@ model Lead {
   email          String?
   phone          String?
   source         String?
+  detectedLanguage String?
+  preferredLanguage String?
+  country       String?
+  timezone      String?
   status         LeadStatus @default(NEW)
   score          Int        @default(0)
   value          Decimal?   @db.Decimal(12, 2)
@@ -307,6 +379,9 @@ model Lead {
   whatsAppMessages WhatsAppMessage[]
   appointments     Appointment[]
   activityLogs     ActivityLog[]
+  inboxConversations InboxConversation[]
+  googleSheetSyncLogs GoogleSheetSyncLog[]
+  calendarBookingLogs CalendarBookingLog[]
 
   @@index([workspaceId])
   @@index([assignedUserId])
@@ -315,6 +390,125 @@ model Lead {
   @@index([pipelineId])
   @@index([stageId])
   @@index([status])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, source])
+  @@index([workspaceId, score])
+  @@index([workspaceId, email])
+  @@index([workspaceId, phone])
+}
+
+model InboxConversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId      String
+  leadId           String?
+  assignedUserId   String?
+  channel          InboxChannel
+  conversationId   String
+  customerName     String?
+  customerPhone    String?
+  customerEmail    String?
+  lastMessage      String?
+  lastMessageType  InboxMessageType?
+  lastMessageTime  DateTime?
+  unreadCount      Int      @default(0)
+  status           InboxConversationStatus @default(OPEN)
+  language         String?
+  leadScore        Int      @default(0)
+  aiSummary        String?
+  buyingIntent     String?
+  sentiment        String?
+  recommendedNextAction String?
+  tags             String[] @default([])
+  metadata         Json?
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead         Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedUser User?    @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages     InboxMessage[]
+
+  @@unique([workspaceId, channel, conversationId])
+  @@index([workspaceId])
+  @@index([leadId])
+  @@index([assignedUserId])
+  @@index([channel])
+  @@index([status])
+  @@index([lastMessageTime])
+  @@index([leadScore])
+  @@index([workspaceId, status, lastMessageTime])
+  @@index([workspaceId, channel, lastMessageTime])
+  @@index([workspaceId, leadScore])
+}
+
+model InboxMessage {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  conversationId String
+  userId         String?
+  sender         InboxSender
+  messageType    InboxMessageType @default(TEXT)
+  text           String?
+  mediaUrl       String?
+  aiGenerated    Boolean @default(false)
+  timestamp      DateTime @default(now())
+  status         InboxMessageStatus @default(SENT)
+  metadata       Json?
+
+  conversation InboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@index([userId])
+  @@index([sender])
+  @@index([messageType])
+  @@index([timestamp])
+  @@index([status])
+}
+
+model GoogleSheetSyncLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  workspaceId String
+  leadId      String?
+  status      String
+  payload     Json
+  response    Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead      Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([leadId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CalendarBookingLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  workspaceId String
+  leadId      String?
+  title       String
+  startTime   DateTime
+  endTime     DateTime
+  attendeeEmail String?
+  attendeePhone String?
+  status      String
+  response    Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead      Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([leadId])
+  @@index([status])
+  @@index([startTime])
+  @@index([createdAt])
 }
 
 model Contact {
@@ -578,6 +772,127 @@ model AIAgent {
   @@index([type])
 }
 
+model AIConversationLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  workspaceId String
+  userId      String?
+  channel     AIConversationChannel
+  messages    Json
+  summary     String?
+  leadScore   Int      @default(0)
+  status      String   @default("CAPTURED")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([channel])
+  @@index([status])
+  @@index([createdAt])
+  @@index([workspaceId, channel, createdAt])
+  @@index([workspaceId, status, createdAt])
+}
+
+model AutomationWorkflow {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  createdById String?
+  name        String
+  description String?
+  goal        String?
+  aiAgent     String?
+  pipeline    String?
+  leadSource  String?
+  triggerEvent String?
+  workingHours String?
+  timezone    String   @default("UTC")
+  retryCount  Int      @default(0)
+  retryDelay  String?
+  status      CampaignStatus @default(DRAFT)
+  nodes       Json
+  edges       Json
+  triggers    Json?
+  conditions  Json?
+  providerConfig Json?
+  crmActions  Json?
+  publishedAt DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  executionLogs AutomationExecutionLog[]
+
+  @@index([workspaceId])
+  @@index([createdById])
+  @@index([status])
+  @@index([triggerEvent])
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, triggerEvent, status])
+}
+
+model AutomationExecutionLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  workflowId  String?
+  userId      String?
+  campaign    String
+  lead        String
+  currentStep String
+  status      String
+  executionTime Int?
+  result      String?
+  aiSummary   String?
+  errors      Json?
+  metadata    Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow  AutomationWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  user      User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([workflowId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, workflowId, createdAt])
+}
+
+model AutomationTemplate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  createdById String?
+  name        String
+  category    String
+  description String?
+  nodes       Json
+  edges       Json
+  triggers    Json?
+  conditions  Json?
+  crmActions  Json?
+  providerConfig Json?
+  isSystem    Boolean @default(false)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([createdById])
+  @@index([category])
+}
+
 model Appointment {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
@@ -605,6 +920,8 @@ model Appointment {
   @@index([contactId])
   @@index([startsAt])
   @@index([status])
+  @@index([workspaceId, status, startsAt])
+  @@index([workspaceId, leadId, startsAt])
 }
 
 model Integration {
@@ -694,4 +1011,6 @@ model ActivityLog {
   @@index([userId])
   @@index([leadId])
   @@index([entityType, entityId])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, action, createdAt])
 }

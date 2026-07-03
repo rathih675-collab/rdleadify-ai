@@ -25,10 +25,18 @@ export default function Turnstile({ onVerify }: TurnstileProps) {
     };
   }, [callbackName, onVerify]);
 
+  useEffect(() => {
+    if (!configured && process.env.NODE_ENV !== "production") {
+      onVerify("dev-turnstile-bypass");
+    }
+  }, [configured, onVerify]);
+
   if (!configured) {
     return (
       <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
-        Captcha site key is missing. Set NEXT_PUBLIC_TURNSTILE_SITE_KEY.
+        {process.env.NODE_ENV === "production"
+          ? "Captcha site key is missing. Set NEXT_PUBLIC_TURNSTILE_SITE_KEY."
+          : "Development captcha bypass is active. Add Turnstile keys before production."}
       </div>
     );
   }

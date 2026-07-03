@@ -1,4 +1,5 @@
 import { jsonError } from "@/lib/server/api";
+import { authLog } from "@/lib/server/dev-log";
 
 type TurnstileResponse = {
   success: boolean;
@@ -13,12 +14,19 @@ export async function verifyTurnstileToken(
   token: string | null | undefined,
   ip?: string | null,
 ): Promise<CaptchaResult> {
+  if (process.env.NODE_ENV !== "production" && token === "dev-turnstile-bypass") {
+    authLog("captcha dev bypass accepted", { ip });
+    return { ok: true };
+  }
+
   if (!token) {
+    authLog("captcha validation failed", { reason: "missing_token", ip });
     return { ok: false, error: "Captcha verification is required." };
   }
 
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
+    authLog("captcha validation failed", { reason: "missing_secret", ip });
     return { ok: false, error: "Captcha is not configured." };
   }
 
@@ -35,11 +43,18 @@ export async function verifyTurnstileToken(
     const data = (await response.json()) as TurnstileResponse;
 
     if (!data.success) {
+      authLog("captcha validation failed", {
+        reason: "turnstile_rejected",
+        errors: data["error-codes"],
+        ip,
+      });
       return { ok: false, error: "Captcha failed. Please try again." };
     }
 
+    authLog("captcha validation success", { ip });
     return { ok: true };
   } catch {
+    authLog("captcha validation failed", { reason: "service_unavailable", ip });
     return { ok: false, error: "Captcha verification service is unavailable." };
   }
 }
