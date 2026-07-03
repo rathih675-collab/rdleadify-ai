@@ -47,6 +47,7 @@ const navigationSections = [
   {
     label: "Engagement",
     items: [
+      { title: "Inbox", href: "/inbox", icon: MessageCircle },
       { title: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
       { title: "AI Agent", href: "/ai-agent", icon: Bot },
       { title: "Voice Campaigns", href: "/voice-campaigns", icon: PhoneCall },
