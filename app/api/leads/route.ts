@@ -1,5 +1,6 @@
 import { LeadStatus } from "@/lib/generated/prisma/enums";
 import { ApiError, assertPermission, readJson, withWorkspace } from "@/lib/server/api";
+import { backendLog } from "@/lib/server/dev-log";
 import { prisma } from "@/lib/server/prisma";
 
 type LeadInfo = {
@@ -32,6 +33,7 @@ type LeadBody = {
   summary?: string;
   nextAction?: string;
   conversationId?: string;
+  source?: string;
 };
 
 function splitName(name: string) {
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
     const name = leadInfo.name?.trim() || "AI Agent Lead";
     const { firstName, lastName } = splitName(name);
     const tags = Array.from(new Set([...(body.tags ?? []), "AI Agent"])).slice(0, 10);
+    const source = (body.source || "AI Agent").slice(0, 80);
     const notes = [
       body.summary,
       body.nextAction ? `Next action: ${body.nextAction}` : null,
@@ -84,48 +87,77 @@ export async function POST(request: Request) {
     ]
       .filter(Boolean)
       .join("\n");
+    const duplicateWhere = [
+      leadInfo.email ? { email: leadInfo.email } : null,
+      leadInfo.phone ? { phone: leadInfo.phone } : null,
+    ].filter(Boolean) as Array<{ email: string } | { phone: string }>;
+    const existingLead = duplicateWhere.length
+      ? await prisma.lead.findFirst({
+          where: {
+            workspaceId: session.workspaceId,
+            OR: duplicateWhere,
+          },
+          select: { id: true },
+        })
+      : null;
 
-    const lead = await prisma.lead.create({
-      data: {
-        workspaceId: session.workspaceId,
-        assignedUserId: session.userId,
-        title: `${name} - AI Agent Lead`,
-        firstName,
-        lastName,
-        email: leadInfo.email,
-        phone: leadInfo.phone,
-        source: "AI Agent",
-        detectedLanguage: leadInfo.detectedLanguage,
-        preferredLanguage: leadInfo.preferredLanguage,
-        country: leadInfo.country,
-        timezone: leadInfo.timezone,
-        status: mapLeadStatus(body.status),
-        score: Math.max(0, Math.min(100, Number(body.score ?? 0))),
-        notes,
-        tags: {
-          connectOrCreate: tags.map((tag) => ({
-            where: {
-              workspaceId_name: {
-                workspaceId: session.workspaceId,
-                name: tag,
-              },
-            },
-            create: {
+    const leadData = {
+      assignedUserId: session.userId,
+      title: `${name} - ${source} Lead`,
+      firstName,
+      lastName,
+      email: leadInfo.email,
+      phone: leadInfo.phone,
+      source,
+      detectedLanguage: leadInfo.detectedLanguage,
+      preferredLanguage: leadInfo.preferredLanguage,
+      country: leadInfo.country,
+      timezone: leadInfo.timezone,
+      status: mapLeadStatus(body.status),
+      score: Math.max(0, Math.min(100, Number(body.score ?? 0))),
+      notes,
+      tags: {
+        connectOrCreate: tags.map((tag) => ({
+          where: {
+            workspaceId_name: {
               workspaceId: session.workspaceId,
               name: tag,
-              color: tag === "Hot Lead" ? "#34d399" : "#38bdf8",
             },
-          })),
-        },
+          },
+          create: {
+            workspaceId: session.workspaceId,
+            name: tag,
+            color: tag === "Hot Lead" ? "#34d399" : "#38bdf8",
+          },
+        })),
       },
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        score: true,
-        source: true,
-      },
-    });
+    };
+
+    const lead = existingLead
+      ? await prisma.lead.update({
+          where: { id: existingLead.id },
+          data: leadData,
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            score: true,
+            source: true,
+          },
+        })
+      : await prisma.lead.create({
+          data: {
+            workspaceId: session.workspaceId,
+            ...leadData,
+          },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            score: true,
+            source: true,
+          },
+        });
 
     await prisma.$transaction([
       prisma.activityLog.create({
@@ -133,15 +165,17 @@ export async function POST(request: Request) {
           workspaceId: session.workspaceId,
           userId: session.userId,
           leadId: lead.id,
-          action: "AI_AGENT_LEAD_CREATED",
+          action: existingLead ? "AI_AGENT_LEAD_UPDATED" : "AI_AGENT_LEAD_CREATED",
           entityType: "Lead",
           entityId: lead.id,
           metadata: {
-            source: "AI Agent",
+            source,
             tags,
             score: lead.score,
             conversationId: body.conversationId,
             leadInfo,
+            duplicatePrevented: Boolean(existingLead),
+            aiSummary: body.summary,
           },
         },
       }),
@@ -158,8 +192,17 @@ export async function POST(request: Request) {
         : []),
     ]);
 
+    backendLog("leads", existingLead ? "duplicate lead updated" : "lead created", {
+      workspaceId: session.workspaceId,
+      leadId: lead.id,
+      source,
+      duplicatePrevented: Boolean(existingLead),
+    });
+
     return {
-      message: "Lead saved successfully.",
+      ok: true,
+      message: existingLead ? "Existing lead updated successfully." : "Lead saved successfully.",
+      duplicatePrevented: Boolean(existingLead),
       lead,
     };
   });

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createOpaqueToken, hashOpaqueToken } from "@/lib/server/tokens";
 
-import { AUTH_COOKIE_NAME, REFRESH_COOKIE_NAME } from "@/lib/server/auth-constants";
+import { AUTH_COOKIE_NAME, NORMAL_SESSION_SECONDS, REFRESH_COOKIE_NAME, REMEMBER_ME_SESSION_SECONDS } from "@/lib/server/auth-constants";
 import { isValidEmail, normalizeEmail } from "@/lib/server/auth-validation";
 import { jsonError, readJson } from "@/lib/server/api";
 import { enforceCaptcha } from "@/lib/server/captcha";
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
   }
 
   const rememberMe = Boolean(body.rememberMe);
-  const sessionMaxAge = rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 8;
+  const sessionMaxAge = rememberMe ? REMEMBER_ME_SESSION_SECONDS : NORMAL_SESSION_SECONDS;
   const refreshToken = createOpaqueToken();
   const refreshTokenHash = hashOpaqueToken(refreshToken);
 
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
     workspaceId: user.workspaceId,
     role: user.userRole,
     email: user.email,
-  }, rememberMe ? "30d" : "8h");
+  }, rememberMe ? "30d" : "24h");
 
   await prisma.$transaction([
     prisma.user.update({
@@ -144,6 +144,23 @@ export async function POST(request: NextRequest) {
         workspaceId: user.workspaceId,
         tokenHash: refreshTokenHash,
         expiresAt: new Date(Date.now() + sessionMaxAge * 1000),
+      },
+    }),
+    prisma.activityLog.create({
+      data: {
+        workspaceId: user.workspaceId,
+        userId: user.id,
+        action: "AUTH_LOGIN_SUCCESS",
+        entityType: "AuthSession",
+        metadata: {
+          ip,
+          userAgent,
+          device: getDeviceLabel(userAgent),
+          rememberMe,
+          status: "SUCCESS",
+        },
+        ipAddress: ip,
+        userAgent,
       },
     }),
   ]);

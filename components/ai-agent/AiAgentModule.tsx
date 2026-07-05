@@ -69,6 +69,21 @@ type RequiredField = "name" | "business" | "requirement" | "budget" | "demoTime"
 type SaveState = "idle" | "saving" | "saved" | "error";
 type GoogleActionState = "idle" | "syncing" | "booking";
 type VoiceStatus = "idle" | "listening" | "thinking" | "speaking" | "extracted";
+type GoogleStatus = {
+  connected: boolean;
+  status: string;
+  connectedEmail?: string | null;
+  lastSync?: string | null;
+  demoMode: boolean;
+  missingSheetsEnv?: string[];
+  missingCalendarEnv?: string[];
+};
+type GoogleLogItem = {
+  id: string;
+  status: string;
+  createdAt: string;
+  title?: string;
+};
 type TabId =
   | "agents"
   | "chat"
@@ -603,6 +618,56 @@ function StatCard({ label, value, helper, icon: Icon, variant = "info" }: {
   );
 }
 
+function GoogleIntegrationSummary({
+  status,
+  sheetLogs,
+  bookingLogs,
+}: {
+  status: GoogleStatus | null;
+  sheetLogs: GoogleLogItem[];
+  bookingLogs: GoogleLogItem[];
+}) {
+  const connected = Boolean(status?.connected);
+
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-white">Google Status</p>
+          <p className="mt-1 truncate text-xs text-slate-400">
+            {connected ? status?.connectedEmail || "Connected account" : "Demo mode active"}
+          </p>
+        </div>
+        <Badge variant={connected ? "success" : "warning"}>{connected ? "Connected" : "Demo"}</Badge>
+      </div>
+      <div className="grid gap-2 text-xs text-slate-300">
+        <LogPreview title="Latest sheet syncs" logs={sheetLogs} empty="No sheet sync logs yet." />
+        <LogPreview title="Latest bookings" logs={bookingLogs} empty="No calendar booking logs yet." />
+      </div>
+    </div>
+  );
+}
+
+function LogPreview({ title, logs, empty }: { title: string; logs: GoogleLogItem[]; empty: string }) {
+  return (
+    <div>
+      <p className="mb-1 font-semibold text-slate-200">{title}</p>
+      {logs.length ? (
+        <div className="space-y-1">
+          {logs.slice(0, 2).map((log) => (
+            <div key={log.id} className="flex min-w-0 items-center justify-between gap-2">
+              <span className="truncate">{log.title || log.status}</span>
+              <span className="shrink-0 text-slate-500">{new Date(log.createdAt).toLocaleDateString()}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-slate-500">{empty}</p>
+      )}
+    </div>
+  );
+}
+
 function MiniBar({ label, value, color = "bg-emerald-400" }: { label: string; value: number; color?: string }) {
   return (
     <div className="space-y-2">
@@ -744,6 +809,9 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
   const [voiceSaveState, setVoiceSaveState] = useState<SaveState>("idle");
   const [googleActionState, setGoogleActionState] = useState<GoogleActionState>("idle");
   const [latestGoogleResult, setLatestGoogleResult] = useState("");
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
+  const [sheetLogs, setSheetLogs] = useState<GoogleLogItem[]>([]);
+  const [bookingLogs, setBookingLogs] = useState<GoogleLogItem[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string>();
   const [lastSavedLeadId, setLastSavedLeadId] = useState<string>();
   const [systemPrompt, setSystemPrompt] = useState(promptTemplates["Sales Qualification"]);
@@ -789,8 +857,34 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
   const selectedLanguage = getLanguageById(languagePreference === AUTO_LANGUAGE_ID ? activeAnalysis.detectedLanguage : languagePreference);
   const selectedVoice = voiceLanguageOptions.find((voice) => voice.label === voiceChoice) ?? voiceLanguageOptions[2];
 
+  async function refreshGoogleIntegration() {
+    try {
+      const [statusResponse, sheetResponse, calendarResponse] = await Promise.all([
+        fetch("/api/integrations/google/status"),
+        fetch("/api/integrations/google/sheets/sync?take=3"),
+        fetch("/api/integrations/google/calendar/book?take=3"),
+      ]);
+
+      if (statusResponse.ok) {
+        const data = (await statusResponse.json()) as GoogleStatus & { ok?: boolean };
+        setGoogleStatus(data);
+      }
+      if (sheetResponse.ok) {
+        const data = (await sheetResponse.json()) as { logs?: GoogleLogItem[] };
+        setSheetLogs(data.logs ?? []);
+      }
+      if (calendarResponse.ok) {
+        const data = (await calendarResponse.json()) as { logs?: GoogleLogItem[] };
+        setBookingLogs(data.logs ?? []);
+      }
+    } catch {
+      setGoogleStatus(null);
+    }
+  }
+
   useEffect(() => {
     void loadConversations();
+    void refreshGoogleIntegration();
   }, []);
 
   useEffect(() => {
@@ -1143,6 +1237,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       setToast(message);
       setLatestGoogleResult(`Sheet: ${data.log?.status ?? "SUCCESS"} (${data.log?.id ?? "log saved"})`);
       addLog("GOOGLE_SHEET_SYNC", "Lead", { channel: source, leadId: lastSavedLeadId ?? "unsaved-lead", demoMode: Boolean(data.demoMode) });
+      void refreshGoogleIntegration();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Google Sheet sync failed.");
     } finally {
@@ -1196,6 +1291,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       setToast(message);
       setLatestGoogleResult(`Calendar: ${data.log?.status ?? "BOOKED"} (${data.log?.title ?? "Demo appointment"})`);
       addLog("GOOGLE_CALENDAR_BOOKING", "Appointment", { channel: source, leadId: lastSavedLeadId ?? "unsaved-lead", demoMode: Boolean(data.demoMode) });
+      void refreshGoogleIntegration();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Calendar booking failed.");
     } finally {
@@ -1538,6 +1634,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
                         Latest Google result: {latestGoogleResult}
                       </div>
                     ) : null}
+                    <GoogleIntegrationSummary status={googleStatus} sheetLogs={sheetLogs} bookingLogs={bookingLogs} />
                   </CardContent>
                 </Card>
               </div>
@@ -1608,6 +1705,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
                         Latest Google result: {latestGoogleResult}
                       </div>
                     ) : null}
+                    <GoogleIntegrationSummary status={googleStatus} sheetLogs={sheetLogs} bookingLogs={bookingLogs} />
                   </CardContent>
                 </Card>
               </div>

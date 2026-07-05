@@ -1,10 +1,13 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { Prisma } from "@/lib/generated/prisma/client";
 import { AIConversationChannel } from "@/lib/generated/prisma/enums";
+import { buildBrainSystemPrompt, defaultPromptConfig, personalityPresets } from "@/lib/ai/brain";
 import { AUTO_LANGUAGE_ID, detectLanguage, questionForField } from "@/lib/ai/languages";
 import { AUTH_COOKIE_NAME } from "@/lib/server/auth-constants";
 import { jsonError, readJson } from "@/lib/server/api";
+import { backendLog } from "@/lib/server/dev-log";
 import { prisma } from "@/lib/server/prisma";
 import { verifySessionToken } from "@/lib/server/tokens";
 
@@ -50,7 +53,10 @@ type LeadAnalysis = {
 };
 
 type ChatBody = {
+  message?: string;
   messages?: ChatMessage[];
+  workspaceId?: string;
+  conversationId?: string;
   leadInfo?: LeadInfo;
   systemPrompt?: string;
   languagePreference?: string;
@@ -272,6 +278,7 @@ function localReply(analysis: LeadAnalysis) {
 }
 
 async function openAiReply(messages: ChatMessage[], analysis: LeadAnalysis, systemPrompt?: string) {
+  const brainPrompt = buildBrainSystemPrompt(defaultPromptConfig, personalityPresets[0], analysis.languageName);
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -285,8 +292,7 @@ async function openAiReply(messages: ChatMessage[], analysis: LeadAnalysis, syst
         {
           role: "system",
           content:
-            systemPrompt?.slice(0, 1500) ||
-            "You are RDLeadify AI, a concise sales qualification agent. Ask for name, phone/email, business type, requirement, budget, and preferred demo time in order. Keep replies under 70 words. Do not invent lead details.",
+            `${systemPrompt?.slice(0, 1500) || "You are RDLeadify AI, a concise sales qualification agent. Ask for name, phone/email, business type, requirement, budget, and preferred demo time in order. Keep replies under 70 words. Do not invent lead details."}\n\n${brainPrompt}`,
         },
         ...messages.map((message) => ({ role: message.role, content: message.content })),
         {
@@ -314,40 +320,133 @@ async function getSession() {
   }
 }
 
-async function persistChatLog(messages: ChatMessage[], analysis: LeadAnalysis, reply: string) {
-  const session = await getSession();
-  if (!session) return null;
+function toJsonValue(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
 
-  const conversation = await prisma.aIConversationLog.create({
-    data: {
-      workspaceId: session.workspaceId,
-      userId: session.userId,
-      channel: AIConversationChannel.CHAT,
-      messages: [...messages, { role: "assistant", content: reply }],
-      summary: analysis.summary,
-      leadScore: analysis.score,
-      status: analysis.status,
-    },
+async function resolveChatContext(workspaceId?: string) {
+  const session = await getSession();
+  const resolvedWorkspaceId = session?.workspaceId || workspaceId;
+
+  if (!resolvedWorkspaceId) return null;
+
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: resolvedWorkspaceId },
     select: { id: true },
   });
 
+  if (!workspace) return null;
+
+  return {
+    workspaceId: workspace.id,
+    userId: session?.userId ?? null,
+  };
+}
+
+async function loadExistingMessages(workspaceId: string, conversationId?: string): Promise<ChatMessage[]> {
+  if (!conversationId) return [];
+
+  const conversation = await prisma.aIConversationLog.findFirst({
+    where: { id: conversationId, workspaceId },
+    select: { messages: true },
+  });
+
+  if (!conversation || !Array.isArray(conversation.messages)) return [];
+
+  return conversation.messages
+    .filter((message): message is { role: Role; content: string } => {
+      if (!message || typeof message !== "object") return false;
+      const record = message as Record<string, unknown>;
+      return (record.role === "assistant" || record.role === "user") && typeof record.content === "string";
+    })
+    .map((message) => ({
+      role: message.role,
+      content: message.content.slice(0, 2000),
+    }));
+}
+
+function normalizeIncomingMessages(body: ChatBody, existingMessages: ChatMessage[]) {
+  const provided = Array.isArray(body.messages) ? body.messages : [];
+  const normalized = provided
+    .filter((message) => message && (message.role === "assistant" || message.role === "user"))
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content ?? "").slice(0, 2000),
+    }))
+    .filter((message) => message.content);
+
+  if (normalized.length) return normalized;
+
+  const message = String(body.message ?? "").trim().slice(0, 2000);
+  return message ? [...existingMessages, { role: "user" as const, content: message }] : existingMessages;
+}
+
+async function persistChatLog(input: {
+  workspaceId: string;
+  userId?: string | null;
+  conversationId?: string;
+  messages: ChatMessage[];
+  analysis: LeadAnalysis;
+  reply: string;
+}) {
+  const { workspaceId, userId, conversationId, messages, analysis, reply } = input;
+  const existing = conversationId
+    ? await prisma.aIConversationLog.findFirst({
+        where: { id: conversationId, workspaceId },
+        select: { id: true },
+      })
+    : null;
+  const storedMessages = toJsonValue([...messages, { role: "assistant", content: reply }]);
+
+  const conversation = existing
+    ? await prisma.aIConversationLog.update({
+        where: { id: existing.id },
+        data: {
+          messages: storedMessages,
+          summary: analysis.summary,
+          leadScore: analysis.score,
+          status: analysis.status,
+        },
+        select: { id: true },
+      })
+    : await prisma.aIConversationLog.create({
+        data: {
+          workspaceId,
+          userId,
+          channel: AIConversationChannel.CHAT,
+          messages: storedMessages,
+          summary: analysis.summary,
+          leadScore: analysis.score,
+          status: analysis.status,
+        },
+        select: { id: true },
+      });
+
   await prisma.activityLog.create({
     data: {
-      workspaceId: session.workspaceId,
-      userId: session.userId,
-      action: "AI_CHAT_MESSAGE",
+      workspaceId,
+      userId,
+      action: existing ? "AI_CHAT_CONVERSATION_UPDATED" : "AI_CHAT_CONVERSATION_CREATED",
       entityType: "AIConversationLog",
       entityId: conversation.id,
-      metadata: {
+      metadata: toJsonValue({
         channel: "CHAT",
         leadScore: analysis.score,
         status: analysis.status,
+        summary: analysis.summary,
         leadInfo: analysis.leadInfo,
         language: analysis.languageName,
         detectedLanguage: analysis.detectedLanguage,
         preferredLanguage: analysis.preferredLanguage,
-      },
+        messageCount: messages.length + 1,
+      }),
     },
+  });
+
+  backendLog("ai-chat", existing ? "conversation updated" : "conversation created", {
+    workspaceId,
+    conversationId: conversation.id,
+    leadScore: analysis.score,
   });
 
   return conversation;
@@ -356,33 +455,85 @@ async function persistChatLog(messages: ChatMessage[], analysis: LeadAnalysis, r
 export async function POST(request: Request) {
   const body = await readJson<ChatBody>(request);
 
-  if (!body || !Array.isArray(body.messages)) {
-    return jsonError("Messages are required.");
+  if (!body) {
+    return jsonError("Invalid request body.");
   }
 
-  const messages = body.messages
-    .filter((message) => message && (message.role === "assistant" || message.role === "user"))
-    .map((message) => ({
-      role: message.role,
-      content: String(message.content ?? "").slice(0, 2000),
-    }))
-    .filter((message) => message.content);
+  const context = await resolveChatContext(body.workspaceId);
+  if (!context) {
+    return jsonError("workspaceId is required when no authenticated session is available.", 401);
+  }
+
+  const existingMessages = await loadExistingMessages(context.workspaceId, body.conversationId);
+  const messages = normalizeIncomingMessages(body, existingMessages);
+
+  if (!messages.some((message) => message.role === "user")) {
+    return jsonError("A user message is required.");
+  }
 
   const analysis = analyzeLead(messages, body.leadInfo, body.languagePreference);
 
   if (!process.env.OPENAI_API_KEY) {
     const reply = localReply(analysis);
-    const conversation = await persistChatLog(messages, analysis, reply);
-    return NextResponse.json({ reply, analysis, provider: "local", conversationId: conversation?.id });
+    const conversation = await persistChatLog({
+      workspaceId: context.workspaceId,
+      userId: context.userId,
+      conversationId: body.conversationId,
+      messages,
+      analysis,
+      reply,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      reply,
+      analysis,
+      provider: "local",
+      conversationId: conversation.id,
+    });
   }
 
   try {
     const reply = await openAiReply(messages, analysis, body.systemPrompt);
-    const conversation = await persistChatLog(messages, analysis, reply);
-    return NextResponse.json({ reply, analysis, provider: "openai", conversationId: conversation?.id });
-  } catch {
+    const conversation = await persistChatLog({
+      workspaceId: context.workspaceId,
+      userId: context.userId,
+      conversationId: body.conversationId,
+      messages,
+      analysis,
+      reply,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      reply,
+      analysis,
+      provider: "openai",
+      conversationId: conversation.id,
+    });
+  } catch (error) {
+    backendLog("ai-chat", "OpenAI failed, using local reply", {
+      workspaceId: context.workspaceId,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+
     const reply = localReply(analysis);
-    const conversation = await persistChatLog(messages, analysis, reply);
-    return NextResponse.json({ reply, analysis, provider: "local", conversationId: conversation?.id });
+    const conversation = await persistChatLog({
+      workspaceId: context.workspaceId,
+      userId: context.userId,
+      conversationId: body.conversationId,
+      messages,
+      analysis,
+      reply,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      reply,
+      analysis,
+      provider: "local",
+      conversationId: conversation.id,
+      warning: "AI provider failed; local fallback response was used.",
+    });
   }
 }

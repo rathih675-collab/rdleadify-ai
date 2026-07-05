@@ -2,14 +2,16 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { AUTH_COOKIE_NAME } from "@/lib/server/auth-constants";
+import { enterprisePermissions } from "@/lib/server/auth-constants";
 import { prisma } from "@/lib/server/prisma";
 import { type SessionPayload, verifySessionToken } from "@/lib/server/tokens";
 
-export function jsonError(message: string, status = 400) {
+export function jsonError(message: string, status = 400, details?: unknown) {
   return NextResponse.json(
     {
       ok: false,
       error: message,
+      ...(details === undefined ? {} : { details }),
     },
     {
       status,
@@ -46,11 +48,13 @@ export async function readJson<T>(request: Request): Promise<T | null> {
 
 export class ApiError extends Error {
   status: number;
+  details?: unknown;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -60,20 +64,7 @@ export type WorkspaceSession = SessionPayload & {
 
 type RouteHandler<T> = (session: WorkspaceSession) => Promise<T>;
 
-const defaultRolePermissions: Record<string, string[]> = {
-  SUPER_ADMIN: ["*"],
-  ADMIN: ["*"],
-  MANAGER: [
-    "ai:write",
-    "automation:write",
-    "integrations:write",
-    "leads:create",
-    "leads:update",
-    "settings:read",
-  ],
-  SALES_AGENT: ["ai:write", "integrations:write", "leads:create", "leads:update"],
-  SUPPORT: ["ai:write", "leads:update"],
-};
+const defaultRolePermissions = enterprisePermissions;
 
 export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
   const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
@@ -97,6 +88,12 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
     },
     select: {
       userRole: true,
+      emailVerifiedAt: true,
+      workspace: {
+        select: {
+          id: true,
+        },
+      },
       role: {
         select: {
           permissions: {
@@ -111,6 +108,10 @@ export async function requireWorkspaceSession(): Promise<WorkspaceSession> {
 
   if (!user) {
     throw new ApiError("Session user is inactive or no longer belongs to this workspace.", 401);
+  }
+
+  if (!user.emailVerifiedAt) {
+    throw new ApiError("Please verify your email before continuing.", 403);
   }
 
   return {
@@ -144,7 +145,7 @@ export async function withWorkspace<T>(handler: RouteHandler<T>) {
     return jsonOk(await handler(session));
   } catch (error) {
     if (error instanceof ApiError) {
-      return jsonError(error.message, error.status);
+      return jsonError(error.message, error.status, error.details);
     }
 
     console.error("[api] unhandled route error", error);

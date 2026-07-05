@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  ArrowUpRight,
+  Activity,
   Bot,
+  CalendarCheck,
   CheckCircle2,
   Code2,
-  Copy,
   CreditCard,
   DatabaseZap,
+  FileText,
   Globe2,
   KeyRound,
   Mail,
@@ -17,6 +17,7 @@ import {
   PhoneCall,
   Plug,
   RefreshCw,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -30,661 +31,465 @@ import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 type BadgeVariant = "success" | "warning" | "danger" | "neutral" | "info";
-type IntegrationStatus = "Connected" | "Disconnected";
-type Health = "Healthy" | "Warning" | "Failed" | "Idle";
+type IntegrationState = "connected" | "disconnected" | "testing" | "warning";
 
-type Kpi = {
-  label: string;
-  value: string;
-  trend: string;
-  helper: string;
-  icon: LucideIcon;
-  variant: BadgeVariant;
-};
-
-type Integration = {
+type IntegrationItem = {
+  id: string;
   name: string;
   category: string;
   icon: LucideIcon;
-  status: IntegrationStatus;
+  status: IntegrationState;
+  health: "Healthy" | "Warning" | "Idle" | "Failed";
   lastSync: string;
-  health: Health;
+  credential: string;
+  features: string[];
+  fields: string[];
 };
 
-type MonitorItem = {
-  label: string;
-  value: number;
-  helper: string;
-  variant: BadgeVariant;
-};
-
-type GoogleDemoStatus = "Not Connected" | "Connected" | "Demo Mode";
-
-type SheetLog = {
-  id: string;
-  status: string;
-  payload: unknown;
-  response?: unknown;
-  createdAt: string;
-};
-
-type CalendarLog = {
+type IntegrationCategory = {
   id: string;
   title: string;
-  status: string;
-  startTime: string;
-  attendeeEmail?: string | null;
-  attendeePhone?: string | null;
-  response?: unknown;
-  createdAt: string;
+  description: string;
+  icon: LucideIcon;
 };
 
-type GoogleLogResponse<T> = {
-  logs?: T[];
-  demoMode?: boolean;
-  mode?: "DEMO" | "REAL_OAUTH_PENDING";
-  missingCredentials?: string[];
+const categories: IntegrationCategory[] = [
+  { id: "ai", title: "AI Providers", description: "LLMs, model routing, usage and API keys.", icon: Bot },
+  { id: "voice", title: "Voice Providers", description: "TTS, realtime voice, streaming and language support.", icon: Sparkles },
+  { id: "calling", title: "Call Providers", description: "Telephony, numbers, incoming/outgoing calls and logs.", icon: PhoneCall },
+  { id: "messaging", title: "Messaging", description: "Team and customer messaging channels.", icon: MessageCircle },
+  { id: "google", title: "Google", description: "Workspace productivity and meeting integrations.", icon: Globe2 },
+  { id: "meta", title: "Meta", description: "Facebook, Instagram, Messenger and Lead Ads.", icon: Globe2 },
+  { id: "email", title: "Email", description: "SMTP and transactional email providers.", icon: Mail },
+  { id: "payments", title: "Payments", description: "Payment collection and billing systems.", icon: CreditCard },
+  { id: "webhooks", title: "Webhooks", description: "Incoming, outgoing, secrets, retry and logs.", icon: Webhook },
+  { id: "custom-api", title: "Custom API", description: "REST, headers, bearer tokens and OAuth placeholders.", icon: Code2 },
+];
+
+const providerGroups: Record<string, Array<Omit<IntegrationItem, "category" | "icon" | "status" | "health" | "lastSync" | "credential"> & { icon?: LucideIcon }>> = {
+  ai: [
+    ["OpenAI", ["Connect", "Disconnect", "Test Connection", "API Key", "Model Selection", "Usage", "Status"]],
+    ["Anthropic Claude", ["Connect", "API Key", "Model Selection", "Usage"]],
+    ["Google Gemini", ["Connect", "API Key", "Model Selection", "Usage"]],
+    ["Azure OpenAI", ["Endpoint", "Deployment", "API Version", "Usage"]],
+    ["Groq", ["API Key", "Model Selection", "Low latency"]],
+    ["DeepSeek", ["API Key", "Model Selection"]],
+    ["Mistral", ["API Key", "Model Selection"]],
+    ["Perplexity", ["API Key", "Search-ready models"]],
+    ["Ollama (Local)", ["Base URL", "Local model", "Private runtime"]],
+  ].map(([name, features]) => ({ id: String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-"), name: String(name), features: features as string[], fields: ["API Key", "Model", "Endpoint"] })),
+  voice: ["ElevenLabs", "OpenAI Realtime", "Azure Speech", "Google Speech", "Deepgram", "Cartesia", "PlayHT"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["Voice Selection", "Language", "Preview Voice", "Streaming Ready"],
+    fields: ["API Key", "Voice", "Language"],
+  })),
+  calling: ["Twilio", "Exotel", "Knowlarity", "Plivo", "Vonage", "SIP"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["Connect", "Buy Number placeholder", "Assigned Numbers", "Outgoing Calls", "Incoming Calls", "Call Logs"],
+    fields: ["Account SID", "Auth Token", "Webhook URL"],
+  })),
+  messaging: ["WhatsApp Cloud API", "Telegram", "Slack", "Discord", "Microsoft Teams"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["Connect", "Messages", "Templates", "Events", "Logs"],
+    fields: ["Access Token", "Bot Token", "Webhook Secret"],
+  })),
+  google: ["Google Sheets", "Google Calendar", "Gmail", "Google Drive", "Google Meet"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["OAuth", "Sync", "Demo Mode", "Logs", "Health"],
+    fields: ["Client ID", "Client Secret", "Scopes"],
+    icon: name === "Google Sheets" ? Table2 : name === "Google Calendar" ? CalendarCheck : undefined,
+  })),
+  meta: ["Facebook", "Instagram", "Messenger", "Facebook Lead Ads"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["OAuth", "Pages", "Forms", "Messages", "Events"],
+    fields: ["App ID", "App Secret", "Page Token"],
+  })),
+  email: ["SMTP", "Resend", "SendGrid", "Mailgun", "Amazon SES"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["Connect", "Sender Domain", "Test Email", "Logs"],
+    fields: ["API Key", "Domain", "From Email"],
+  })),
+  payments: ["Stripe", "Razorpay", "PayPal"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["Connect", "Webhook", "Payments", "Logs"],
+    fields: ["Publishable Key", "Secret Key", "Webhook Secret"],
+  })),
+  webhooks: ["Incoming Webhook", "Outgoing Webhook", "Secret Keys", "Retry", "Logs"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["URL", "Secret Keys", "Retry", "Logs"],
+    fields: ["Endpoint URL", "Secret", "Retry Policy"],
+  })),
+  "custom-api": ["REST API", "Headers", "Bearer Token", "OAuth Placeholder", "Test API"].map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name,
+    features: ["REST API", "Headers", "Bearer Token", "OAuth Placeholder", "Test API"],
+    fields: ["Base URL", "Headers", "Bearer Token"],
+  })),
 };
 
-const kpis: Kpi[] = [
-  {
-    label: "Connected Apps",
-    value: "18",
-    trend: "+4",
-    helper: "Apps actively connected",
-    icon: Plug,
-    variant: "success",
-  },
-  {
-    label: "Active APIs",
-    value: "12",
-    trend: "99.2% uptime",
-    helper: "API credentials in use",
-    icon: Code2,
-    variant: "info",
-  },
-  {
-    label: "Sync Success Rate",
-    value: "98.6%",
-    trend: "+1.8%",
-    helper: "Successful sync jobs",
-    icon: CheckCircle2,
-    variant: "success",
-  },
-  {
-    label: "Failed Syncs",
-    value: "42",
-    trend: "-12.4%",
-    helper: "Needs retry or repair",
-    icon: AlertTriangle,
-    variant: "warning",
-  },
-];
+function buildIntegrations(): IntegrationItem[] {
+  return categories.flatMap((category, categoryIndex) => {
+    const Icon = category.icon;
+    return (providerGroups[category.id] ?? []).map((provider, index) => ({
+      ...provider,
+      category: category.id,
+      icon: provider.icon ?? Icon,
+      status: category.id === "google" && index < 2 ? "connected" : index % 5 === 0 ? "warning" : "disconnected",
+      health: category.id === "google" && index < 2 ? "Healthy" : index % 5 === 0 ? "Warning" : "Idle",
+      lastSync: category.id === "google" && index < 2 ? "Demo log ready" : categoryIndex % 2 === 0 ? "Never" : "Provider-ready",
+      credential: `rd_${category.id}_****${String(index + 17).padStart(2, "0")}`,
+    }));
+  });
+}
 
-const integrations: Integration[] = [
-  { name: "Google Sheets", category: "Google", icon: Table2, status: "Connected", lastSync: "4 min ago", health: "Healthy" },
-  { name: "Google Calendar", category: "Google", icon: CheckCircle2, status: "Connected", lastSync: "12 min ago", health: "Healthy" },
-  { name: "Gmail", category: "Google", icon: Mail, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Google Drive", category: "Google", icon: DatabaseZap, status: "Connected", lastSync: "1 hr ago", health: "Warning" },
-  { name: "WhatsApp Cloud API", category: "Meta", icon: MessageCircle, status: "Connected", lastSync: "2 min ago", health: "Healthy" },
-  { name: "Facebook Login", category: "Meta", icon: Globe2, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Facebook Lead Ads", category: "Meta", icon: Globe2, status: "Connected", lastSync: "18 min ago", health: "Healthy" },
-  { name: "Instagram", category: "Meta", icon: MessageCircle, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "OpenAI", category: "AI", icon: Bot, status: "Connected", lastSync: "Live", health: "Healthy" },
-  { name: "ElevenLabs", category: "AI", icon: Bot, status: "Connected", lastSync: "8 min ago", health: "Warning" },
-  { name: "Deepgram", category: "AI", icon: Bot, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "OpenRouter", category: "AI", icon: Bot, status: "Connected", lastSync: "Live", health: "Healthy" },
-  { name: "Twilio", category: "Calling", icon: PhoneCall, status: "Connected", lastSync: "6 min ago", health: "Healthy" },
-  { name: "Exotel", category: "Calling", icon: PhoneCall, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Plivo", category: "Calling", icon: PhoneCall, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Razorpay", category: "Payments", icon: CreditCard, status: "Connected", lastSync: "Today", health: "Healthy" },
-  { name: "Stripe", category: "Payments", icon: CreditCard, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Webhooks", category: "Automation", icon: Webhook, status: "Connected", lastSync: "Live", health: "Healthy" },
-  { name: "REST API", category: "Automation", icon: Code2, status: "Connected", lastSync: "Live", health: "Healthy" },
-  { name: "Zapier", category: "Automation", icon: Globe2, status: "Disconnected", lastSync: "Never", health: "Idle" },
-  { name: "Make", category: "Automation", icon: Globe2, status: "Connected", lastSync: "42 min ago", health: "Healthy" },
-  { name: "n8n", category: "Automation", icon: DatabaseZap, status: "Disconnected", lastSync: "Never", health: "Idle" },
-];
+const integrations = buildIntegrations();
 
-const categories = ["Google", "Meta", "AI", "Calling", "Payments", "Automation"];
-
-const healthVariant: Record<Health, BadgeVariant> = {
+const healthVariant: Record<IntegrationItem["health"], BadgeVariant> = {
   Healthy: "success",
   Warning: "warning",
-  Failed: "danger",
   Idle: "neutral",
+  Failed: "danger",
 };
 
-const statusVariant: Record<IntegrationStatus, BadgeVariant> = {
-  Connected: "success",
-  Disconnected: "neutral",
+const statusVariant: Record<IntegrationState, BadgeVariant> = {
+  connected: "success",
+  disconnected: "neutral",
+  testing: "warning",
+  warning: "warning",
 };
 
-const syncMonitor: MonitorItem[] = [
-  { label: "Google Sheets Sync", value: 98, helper: "Lead rows synced", variant: "success" },
-  { label: "Calendar Sync", value: 96, helper: "Events synchronized", variant: "success" },
-  { label: "WhatsApp Sync", value: 99, helper: "Messages and templates", variant: "success" },
-  { label: "CRM Sync", value: 94, helper: "Contacts, leads, companies", variant: "info" },
-  { label: "AI Sync", value: 89, helper: "Model and voice services", variant: "warning" },
-];
+const inputClass =
+  "h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-emerald-400/60";
 
-const recommendations = [
-  { title: "Broken integrations", detail: "Google Drive has warning status and 3 retry events pending.", variant: "warning" as const },
-  { title: "API rate limit warning", detail: "WhatsApp Cloud API is at 82% of hourly send quota.", variant: "warning" as const },
-  { title: "Token expiry warning", detail: "Razorpay token expires in 5 days. Rotate credentials soon.", variant: "danger" as const },
-  { title: "Recommended integrations", detail: "Connect Gmail and Instagram to unify engagement history.", variant: "info" as const },
-];
+export default function IntegrationsModule() {
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [query, setQuery] = useState("");
+  const [stateById, setStateById] = useState<Record<string, IntegrationState>>({});
+  const [toast, setToast] = useState("");
+  const [testingId, setTestingId] = useState<string | null>(null);
 
-const activity = [
-  { title: "Connected apps", detail: "Make scenario connected by Revenue Ops", variant: "success" as const },
-  { title: "Failed sync", detail: "Google Drive sync failed on folder permissions", variant: "danger" as const },
-  { title: "Successful sync", detail: "Google Sheets synced 1,284 lead rows", variant: "success" as const },
-  { title: "Webhook triggered", detail: "Incoming webhook created 18 leads from partner form", variant: "info" as const },
-];
+  const visibleIntegrations = useMemo(() => {
+    const normalized = query.toLowerCase().trim();
+    return integrations.filter((integration) => {
+      const matchesCategory = selectedCategory === "all" || integration.category === selectedCategory;
+      const matchesQuery =
+        !normalized ||
+        integration.name.toLowerCase().includes(normalized) ||
+        integration.features.some((feature) => feature.toLowerCase().includes(normalized));
+      return matchesCategory && matchesQuery;
+    });
+  }, [query, selectedCategory]);
 
-function KpiCard({ item }: { item: Kpi }) {
-  const Icon = item.icon;
+  const connectedCount = integrations.filter((item) => item.status === "connected").length;
+  const warningCount = integrations.filter((item) => item.status === "warning").length;
 
+  async function writeLog(provider: string, action: string, status: "SUCCESS" | "FAILED", error?: string) {
+    await fetch("/api/integrations/logs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider,
+        action,
+        status,
+        requestTime: new Date().toISOString(),
+        responseTime: new Date().toISOString(),
+        error,
+      }),
+    }).catch(() => undefined);
+  }
+
+  async function testConnection(integration: IntegrationItem) {
+    setTestingId(integration.id);
+    setStateById((current) => ({ ...current, [integration.id]: "testing" }));
+    setToast(`Testing ${integration.name}...`);
+
+    try {
+      if (integration.id === "google-sheets") {
+        const response = await fetch("/api/integrations/google/sheets/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: "Integration Hub",
+            lead: {
+              name: "Integration Demo Lead",
+              email: "integration-demo@rdleadify.ai",
+              phone: "+91 90000 00000",
+              requirement: "Google Sheets test sync",
+            },
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Google Sheets test failed.");
+        setToast(data.message || "Google Sheets test completed.");
+      } else if (integration.id === "google-calendar") {
+        const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const response = await fetch("/api/integrations/google/calendar/book", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Integration Hub Test Booking",
+            attendeeEmail: "integration-demo@rdleadify.ai",
+            startTime: start.toISOString(),
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Google Calendar test failed.");
+        setToast(data.message || "Google Calendar test completed.");
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        setToast(`${integration.name} test completed in Demo Mode.`);
+      }
+
+      setStateById((current) => ({ ...current, [integration.id]: "connected" }));
+      await writeLog(integration.name, "TEST_CONNECTION", "SUCCESS");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${integration.name} test failed.`;
+      setToast(message);
+      setStateById((current) => ({ ...current, [integration.id]: "warning" }));
+      await writeLog(integration.name, "TEST_CONNECTION", "FAILED", message);
+    } finally {
+      setTestingId(null);
+    }
+  }
+
+  async function changeConnection(integration: IntegrationItem, status: IntegrationState) {
+    setStateById((current) => ({ ...current, [integration.id]: status }));
+    const action = status === "connected" ? "CONNECT" : status === "disconnected" ? "DISCONNECT" : "RECONNECT";
+    setToast(`${integration.name} ${status === "connected" ? "connected" : status === "disconnected" ? "disconnected" : "updated"} in demo mode.`);
+    await writeLog(integration.name, action, "SUCCESS");
+  }
+
+  return (
+    <div className="flex min-h-screen overflow-x-hidden bg-[#07111f] text-white">
+      <Sidebar />
+      <main className="min-w-0 flex-1">
+        <Topbar eyebrow="Platform" title="Integration Hub" />
+
+        <section className="space-y-6 p-4 md:p-6 lg:p-8">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <Badge variant="info">Workspace-isolated credentials</Badge>
+              <h1 className="mt-4 text-3xl font-bold tracking-tight text-white md:text-4xl">
+                Enterprise Integration Hub
+              </h1>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400 md:text-base">
+                Connect AI, voice, calling, messaging, Google, Meta, email, payments, webhooks and custom APIs from one workspace-level control plane.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button><Plug className="h-4 w-4" />Connect New Integration</Button>
+              <Button variant="outline"><FileText className="h-4 w-4" />View Logs</Button>
+              <Button variant="outline"><ShieldCheck className="h-4 w-4" />Encryption Architecture</Button>
+            </div>
+          </div>
+
+          {toast ? <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-100">{toast}</div> : null}
+
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+            <Metric icon={Plug} label="Connected" value={connectedCount} detail="Active provider connections" />
+            <Metric icon={Activity} label="Warnings" value={warningCount} detail="Needs review or credentials" />
+            <Metric icon={DatabaseZap} label="Available Apps" value={integrations.length} detail="Provider-ready adapters" />
+            <Metric icon={KeyRound} label="Credential Mode" value="Encrypted" detail="Masked credentials, scoped by workspace" />
+          </div>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Browse Integrations</CardTitle>
+                <CardDescription>Search providers or filter by category. All credentials are designed for encrypted workspace-level storage.</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <button type="button" onClick={() => setSelectedCategory("all")} className={chipClass(selectedCategory === "all")}>All</button>
+                  {categories.map((category) => (
+                    <button key={category.id} type="button" onClick={() => setSelectedCategory(category.id)} className={chipClass(selectedCategory === category.id)}>
+                      {category.title}
+                    </button>
+                  ))}
+                </div>
+                <label className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search provider, model, webhook..." className={cn(inputClass, "pl-10")} />
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-6">
+            {categories
+              .filter((category) => selectedCategory === "all" || selectedCategory === category.id)
+              .map((category) => {
+                const items = visibleIntegrations.filter((integration) => integration.category === category.id);
+                if (!items.length) return null;
+                const Icon = category.icon;
+
+                return (
+                  <Card key={category.id}>
+                    <CardHeader>
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
+                          <Icon className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <CardTitle>{category.title}</CardTitle>
+                          <CardDescription>{category.description}</CardDescription>
+                        </div>
+                      </div>
+                      <Badge variant="neutral">{items.length} providers</Badge>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                      {items.map((integration) => (
+                        <IntegrationCard
+                          key={`${integration.category}-${integration.id}`}
+                          integration={integration}
+                          status={stateById[integration.id] ?? integration.status}
+                          testing={testingId === integration.id}
+                          onTest={() => void testConnection(integration)}
+                          onConnect={() => void changeConnection(integration, "connected")}
+                          onDisconnect={() => void changeConnection(integration, "disconnected")}
+                        />
+                      ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+          </div>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Webhook and Custom API Architecture</CardTitle>
+                <CardDescription>Incoming webhooks, outgoing webhooks, secret keys, retries, logs, REST headers, bearer tokens and OAuth placeholders.</CardDescription>
+              </div>
+              <Webhook className="h-5 w-5 text-emerald-300" />
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {["Incoming Webhook URL", "Outgoing Retry Policy", "Secret Key Rotation", "Custom REST Test API"].map((item) => (
+                <div key={item} className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <Code2 className="h-5 w-5 text-emerald-300" />
+                  <p className="mt-3 font-semibold text-white">{item}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">Provider-ready configuration block with logs and masked credentials.</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function chipClass(active: boolean) {
+  return cn(
+    "shrink-0 rounded-lg border px-3 py-2 text-sm font-semibold transition",
+    active ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-black/20 text-slate-300 hover:border-white/20",
+  );
+}
+
+function Metric({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string | number; detail: string }) {
   return (
     <Card>
       <CardContent className="p-5">
-        <div className="flex items-center justify-between">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
-            <Icon className="h-5 w-5" />
-          </span>
-          <Badge variant={item.variant}>
-            <ArrowUpRight className="h-3 w-3" />
-            {item.trend}
-          </Badge>
-        </div>
-        <p className="mt-5 text-sm text-slate-400">{item.label}</p>
-        <h2 className="mt-1 text-3xl font-bold tracking-tight text-white">{item.value}</h2>
-        <p className="mt-2 text-sm text-slate-500">{item.helper}</p>
+        <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
+          <Icon className="h-5 w-5" />
+        </span>
+        <p className="mt-5 text-sm text-slate-400">{label}</p>
+        <h3 className="mt-1 text-3xl font-bold tracking-tight text-white">{value}</h3>
+        <p className="mt-2 text-sm text-slate-500">{detail}</p>
       </CardContent>
     </Card>
   );
 }
 
-function IntegrationCard({ item }: { item: Integration }) {
-  const Icon = item.icon;
+function IntegrationCard({
+  integration,
+  status,
+  testing,
+  onTest,
+  onConnect,
+  onDisconnect,
+}: {
+  integration: IntegrationItem;
+  status: IntegrationState;
+  testing: boolean;
+  onTest: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  const Icon = integration.icon;
+  const connected = status === "connected";
 
   return (
-    <article className="rounded-2xl border border-white/10 bg-black/10 p-4 transition hover:border-emerald-400/30">
+    <article className="rounded-2xl border border-white/10 bg-black/20 p-4 transition hover:border-emerald-400/30">
       <div className="flex items-start justify-between gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
           <Icon className="h-5 w-5" />
         </span>
-        <Badge variant={statusVariant[item.status]}>{item.status}</Badge>
+        <div className="flex flex-col items-end gap-2">
+          <Badge variant={statusVariant[status]}>{testing ? "Testing" : connected ? "Connected" : status === "warning" ? "Warning" : "Disconnected"}</Badge>
+          <Badge variant={healthVariant[integration.health]}>{integration.health}</Badge>
+        </div>
       </div>
-      <h3 className="mt-4 font-semibold text-white">{item.name}</h3>
+
+      <h3 className="mt-4 font-semibold text-white">{integration.name}</h3>
       <div className="mt-3 grid gap-2 text-sm text-slate-400">
-        <div className="flex items-center justify-between gap-3">
-          <span>Last Sync</span>
-          <span className="text-slate-300">{item.lastSync}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>Health</span>
-          <Badge variant={healthVariant[item.health]}>{item.health}</Badge>
-        </div>
+        <Row label="Last Sync" value={integration.lastSync} />
+        <Row label="Credentials" value={integration.credential} />
+        <Row label="Storage" value="Encrypted workspace vault" />
       </div>
-      <div className="mt-4 grid gap-2">
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {integration.features.slice(0, 5).map((feature) => (
+          <Badge key={feature} variant="neutral">{feature}</Badge>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Configuration</p>
+        <p className="mt-2 text-sm text-slate-300">{integration.fields.join(" | ")}</p>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <Button onClick={connected ? onDisconnect : onConnect} variant={connected ? "ghost" : "outline"} className="justify-start">
+          {connected ? <Unplug className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
+          {connected ? "Disconnect" : "Connect"}
+        </Button>
+        <Button onClick={onTest} variant="outline" className="justify-start" disabled={testing}>
+          <RefreshCw className={cn("h-4 w-4", testing ? "animate-spin" : "")} />
+          Test
+        </Button>
         <Button variant="outline" className="justify-start">
           <Settings className="h-4 w-4" />
           Configure
         </Button>
         <Button variant="outline" className="justify-start">
-          <ShieldCheck className="h-4 w-4" />
-          Test Connection
-        </Button>
-        <Button variant="ghost" className="justify-start">
-          <Unplug className="h-4 w-4" />
-          Disconnect
+          <FileText className="h-4 w-4" />
+          Logs
         </Button>
       </div>
     </article>
   );
 }
 
-function SyncBar({ item }: { item: MonitorItem }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/10 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-white">{item.label}</p>
-          <p className="mt-1 text-xs text-slate-500">{item.helper}</p>
-        </div>
-        <Badge variant={item.variant}>{item.value}%</Badge>
-      </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full bg-emerald-400" style={{ width: `${item.value}%` }} />
-      </div>
-    </div>
-  );
-}
-
-export default function IntegrationsModule() {
-  const [googleStatus, setGoogleStatus] = useState<GoogleDemoStatus>("Demo Mode");
-  const [sheetLogs, setSheetLogs] = useState<SheetLog[]>([]);
-  const [calendarLogs, setCalendarLogs] = useState<CalendarLog[]>([]);
-  const [missingCredentials, setMissingCredentials] = useState<string[]>([]);
-  const [toast, setToast] = useState("");
-  const [isTesting, setIsTesting] = useState(false);
-
-  async function loadGoogleLogs() {
-    try {
-      const [sheetResponse, calendarResponse] = await Promise.all([
-        fetch("/api/integrations/google/sheets/sync"),
-        fetch("/api/integrations/google/calendar/book"),
-      ]);
-
-      if (sheetResponse.ok) {
-        const data = (await sheetResponse.json()) as GoogleLogResponse<SheetLog>;
-        setSheetLogs(data.logs ?? []);
-        setMissingCredentials(data.missingCredentials ?? []);
-        setGoogleStatus(data.demoMode ? "Demo Mode" : "Connected");
-      }
-
-      if (calendarResponse.ok) {
-        const data = (await calendarResponse.json()) as GoogleLogResponse<CalendarLog>;
-        setCalendarLogs(data.logs ?? []);
-        setMissingCredentials(data.missingCredentials ?? []);
-        setGoogleStatus(data.demoMode ? "Demo Mode" : "Connected");
-      }
-    } catch {
-      setGoogleStatus("Demo Mode");
-    }
-  }
-
-  useEffect(() => {
-    void loadGoogleLogs();
-  }, []);
-
-  async function testSheetSync() {
-    setIsTesting(true);
-    setToast("");
-    try {
-      const response = await fetch("/api/integrations/google/sheets/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: "Integrations Demo",
-          lead: {
-            name: "Demo Lead",
-            email: "demo@rdleadify.ai",
-            phone: "+91 90000 00000",
-            requirement: "AI CRM and Google Sheets sync",
-            budget: "75000 INR",
-          },
-        }),
-      });
-      const data = (await response.json()) as { message?: string; error?: string };
-      if (!response.ok) throw new Error(data.error ?? "Sheet sync failed.");
-      setToast(data.message ?? "Demo sync completed");
-      await loadGoogleLogs();
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Sheet sync failed.");
-    } finally {
-      setIsTesting(false);
-    }
-  }
-
-  async function testCalendarBooking() {
-    setIsTesting(true);
-    setToast("");
-    try {
-      const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      const end = new Date(start.getTime() + 30 * 60 * 1000);
-      const response = await fetch("/api/integrations/google/calendar/book", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "RDLeadify AI demo appointment",
-          startTime: start.toISOString(),
-          endTime: end.toISOString(),
-          attendeeEmail: "demo@rdleadify.ai",
-          attendeePhone: "+91 90000 00000",
-          requirement: "AI CRM and calendar booking demo",
-        }),
-      });
-      const data = (await response.json()) as { message?: string; error?: string };
-      if (!response.ok) throw new Error(data.error ?? "Calendar booking failed.");
-      setToast(data.message ?? "Demo calendar booking completed");
-      await loadGoogleLogs();
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Calendar booking failed.");
-    } finally {
-      setIsTesting(false);
-    }
-  }
-
-  const lastSheetSync = sheetLogs[0]?.createdAt ? sheetLogs[0].createdAt.slice(0, 19).replace("T", " ") : "Never";
-  const lastCalendarBooking = calendarLogs[0]?.createdAt ? calendarLogs[0].createdAt.slice(0, 19).replace("T", " ") : "Never";
-
-  return (
-    <div className="flex min-h-screen bg-[#07111f] text-white">
-      <Sidebar />
-      <main className="min-w-0 flex-1">
-        <Topbar eyebrow="Platform" title="Integrations Hub" />
-
-        <section className="space-y-6 p-4 md:p-6 lg:p-8">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-            <div>
-              <Badge variant="info">Enterprise integration control plane</Badge>
-              <h1 className="mt-4 text-3xl font-bold tracking-tight text-white md:text-4xl">
-                Integrations Hub
-              </h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400 md:text-base">
-                Connect apps, manage APIs, monitor sync health, configure webhooks,
-                and keep RDLeadify AI connected to your revenue stack.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <Button>
-                <Plug className="h-4 w-4" />
-                Connect New Integration
-              </Button>
-              <Button variant="outline">
-                <Code2 className="h-4 w-4" />
-                API Documentation
-              </Button>
-              <Button variant="outline">
-                <Webhook className="h-4 w-4" />
-                Webhook Manager
-              </Button>
-              <Button variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                Refresh Connections
-              </Button>
-            </div>
-          </div>
-
-          {toast ? (
-            <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-3 text-sm text-emerald-100">
-              {toast}
-            </div>
-          ) : null}
-
-          <Card className="border-emerald-500/20 bg-emerald-500/10">
-            <CardHeader>
-              <div>
-                <CardTitle>Google Workspace Demo</CardTitle>
-                <CardDescription>Push AI-qualified leads to Google Sheets and create Google Calendar bookings. Missing OAuth credentials automatically use Demo Mode.</CardDescription>
-              </div>
-              <Badge variant={googleStatus === "Connected" ? "success" : googleStatus === "Demo Mode" ? "warning" : "neutral"}>
-                {googleStatus}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              {googleStatus === "Demo Mode" ? (
-                <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
-                  Demo Mode is active because Google OAuth credentials are missing: {missingCredentials.length ? missingCredentials.join(", ") : "credentials not detected"}. Buttons still work and save database logs.
-                </div>
-              ) : (
-                <div className="rounded-xl border border-sky-400/20 bg-sky-400/10 p-4 text-sm text-sky-100">
-                  Google OAuth credentials detected. Real provider adapter is ready to be connected; current route records a pending real-sync log.
-                </div>
-              )}
-              <div className="grid gap-4 lg:grid-cols-2">
-                <article className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
-                        <Table2 className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-white">Google Sheets</h3>
-                        <p className="mt-1 text-sm text-slate-400">Lead row sync for webinar demos and CRM exports.</p>
-                        <p className="mt-2 text-xs text-slate-500">Last Sync: {lastSheetSync}</p>
-                      </div>
-                    </div>
-                    <Badge variant={googleStatus === "Connected" ? "success" : "warning"}>{googleStatus}</Badge>
-                  </div>
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <Button variant="outline" onClick={() => setToast("Google OAuth connector is provider-ready. Add credentials to switch from Demo Mode.")}>
-                      <Plug className="h-4 w-4" />
-                      Connect Google
-                    </Button>
-                    <Button onClick={() => void testSheetSync()} disabled={isTesting}>
-                      <RefreshCw className="h-4 w-4" />
-                      Test Sheet Sync
-                    </Button>
-                  </div>
-                </article>
-
-                <article className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
-                        <CheckCircle2 className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-white">Google Calendar</h3>
-                        <p className="mt-1 text-sm text-slate-400">Book demo appointments from AI extracted lead info.</p>
-                        <p className="mt-2 text-xs text-slate-500">Last Booking: {lastCalendarBooking}</p>
-                      </div>
-                    </div>
-                    <Badge variant={googleStatus === "Connected" ? "success" : "warning"}>{googleStatus}</Badge>
-                  </div>
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <Button variant="outline" onClick={() => setToast("Google OAuth connector is provider-ready. Add credentials to switch from Demo Mode.")}>
-                      <Plug className="h-4 w-4" />
-                      Connect Google
-                    </Button>
-                    <Button onClick={() => void testCalendarBooking()} disabled={isTesting}>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Test Calendar Booking
-                    </Button>
-                  </div>
-                </article>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="font-semibold text-white">Latest Sheet Sync Logs</p>
-                    <Badge variant="neutral">{sheetLogs.length}</Badge>
-                  </div>
-                  <div className="space-y-3">
-                    {sheetLogs.length ? sheetLogs.slice(0, 4).map((log) => (
-                      <div key={log.id} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-white">{log.status}</p>
-                          <span className="text-xs text-slate-500">{log.createdAt.slice(0, 19).replace("T", " ")}</span>
-                        </div>
-                        <p className="mt-2 break-words text-xs text-slate-400">Payload: {JSON.stringify(log.payload ?? {}).slice(0, 160)}</p>
-                        <p className="mt-1 break-words text-xs text-slate-500">Response: {JSON.stringify(log.response ?? {}).slice(0, 160)}</p>
-                      </div>
-                    )) : <p className="text-sm text-slate-400">No Google Sheet sync logs yet. Run a test sync.</p>}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="font-semibold text-white">Latest Calendar Booking Logs</p>
-                    <Badge variant="neutral">{calendarLogs.length}</Badge>
-                  </div>
-                  <div className="space-y-3">
-                    {calendarLogs.length ? calendarLogs.slice(0, 4).map((log) => (
-                      <div key={log.id} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-white">{log.title}</p>
-                          <Badge variant={log.status.includes("BOOKED") ? "success" : "warning"}>{log.status}</Badge>
-                        </div>
-                        <p className="mt-2 text-xs text-slate-400">{log.startTime.slice(0, 19).replace("T", " ")} | {log.attendeeEmail || log.attendeePhone || "No attendee"}</p>
-                        <p className="mt-1 break-words text-xs text-slate-500">Payload: {JSON.stringify({ title: log.title, attendeeEmail: log.attendeeEmail, attendeePhone: log.attendeePhone }).slice(0, 160)}</p>
-                      </div>
-                    )) : <p className="text-sm text-slate-400">No Google Calendar booking logs yet. Run a test booking.</p>}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-            {kpis.map((item) => (
-              <KpiCard key={item.label} item={item} />
-            ))}
-          </div>
-
-          <div className="grid gap-6 2xl:grid-cols-12">
-            <div className="space-y-6 2xl:col-span-8">
-              {categories.map((category) => {
-                const categoryItems = integrations.filter((item) => item.category === category);
-
-                return (
-                  <Card key={category}>
-                    <CardHeader>
-                      <div>
-                        <CardTitle>{category}</CardTitle>
-                        <CardDescription>{categoryItems.length} available integrations.</CardDescription>
-                      </div>
-                      <Badge variant="neutral">{categoryItems.length} apps</Badge>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                        {categoryItems.map((item) => (
-                          <IntegrationCard key={`${item.category}-${item.name}`} item={item} />
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-
-            <div className="space-y-6 2xl:col-span-4">
-              <Card>
-                <CardHeader>
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
-                      <Webhook className="h-5 w-5" />
-                    </span>
-                    <div>
-                      <CardTitle>Webhook Manager</CardTitle>
-                      <CardDescription>Incoming, outgoing, secret, retry, and failed events.</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {[
-                    ["Incoming Webhooks", "18 active endpoints"],
-                    ["Outgoing Webhooks", "12 destinations"],
-                    ["Secret Key", "rd_whsec_••••••••"],
-                    ["Retry Status", "3 events retrying"],
-                    ["Failed Events", "7 failed events"],
-                  ].map(([label, value]) => (
-                    <div key={label} className="flex items-center justify-between rounded-xl border border-white/10 bg-black/10 p-4">
-                      <p className="text-sm font-semibold text-white">{label}</p>
-                      <Badge variant={label === "Failed Events" ? "warning" : "neutral"}>{value}</Badge>
-                    </div>
-                  ))}
-                  <Button className="w-full" variant="outline">
-                    <Copy className="h-4 w-4" />
-                    Copy URL
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
-                      <KeyRound className="h-5 w-5" />
-                    </span>
-                    <div>
-                      <CardTitle>API Keys</CardTitle>
-                      <CardDescription>Credential management for apps and services.</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="rounded-xl border border-white/10 bg-black/10 p-4">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">Public Key</p>
-                    <p className="mt-2 text-sm font-semibold text-white">rd_pub_live_9a72••••</p>
-                  </div>
-                  <div className="rounded-xl border border-white/10 bg-black/10 p-4">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">Secret Key</p>
-                    <p className="mt-2 text-sm font-semibold text-white">rd_sec_live_••••••••</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button variant="outline">Regenerate</Button>
-                    <Button variant="outline">
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </Button>
-                  </div>
-                  <p className="text-sm text-slate-500">Last Used: Today, 3:18 PM</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Sync Monitor</CardTitle>
-                  <CardDescription>Live sync health across core systems.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {syncMonitor.map((item) => (
-                    <SyncBar key={item.label} item={item} />
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-emerald-500/20 bg-emerald-500/10">
-                <CardHeader>
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300">
-                      <Sparkles className="h-5 w-5" />
-                    </span>
-                    <div>
-                      <CardTitle>AI Recommendations</CardTitle>
-                      <CardDescription>Integration risk and next-best setup guidance.</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {recommendations.map((item) => (
-                    <div key={item.title} className="rounded-xl bg-black/20 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-white">{item.title}</p>
-                        <Badge variant={item.variant}>AI</Badge>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">{item.detail}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>Latest integration events and sync outcomes.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {activity.map((item) => (
-                    <div key={item.title} className="rounded-xl border border-white/10 bg-black/10 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-white">{item.title}</p>
-                        <Badge variant={item.variant}>Event</Badge>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-slate-400">{item.detail}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </section>
-      </main>
+    <div className="flex items-center justify-between gap-3">
+      <span>{label}</span>
+      <span className="truncate text-right text-slate-300">{value}</span>
     </div>
   );
 }

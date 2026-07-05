@@ -62,6 +62,16 @@ type Kpi = {
   variant: BadgeVariant;
 };
 
+export type WidgetDashboardMetrics = {
+  leads: number;
+  conversations: number;
+  appointments: number;
+  sheetSyncs: number;
+  aiChats: number;
+  websiteConversations: number;
+  widgetLeads: number;
+};
+
 type HealthItem = {
   name: string;
   status: string;
@@ -75,41 +85,6 @@ const tooltipStyle = {
   borderRadius: 12,
   color: "#fff",
 };
-
-const kpis: Kpi[] = [
-  {
-    title: "Qualified Pipeline",
-    value: "$4.82M",
-    change: "+18.4%",
-    helper: "Weighted revenue this quarter",
-    icon: DollarSign,
-    variant: "success",
-  },
-  {
-    title: "New Leads",
-    value: "12,480",
-    change: "+24.1%",
-    helper: "Across forms, ads and WhatsApp",
-    icon: Users,
-    variant: "success",
-  },
-  {
-    title: "AI Calls",
-    value: "1,284",
-    change: "96.8% SLA",
-    helper: "Qualification calls completed",
-    icon: Bot,
-    variant: "info",
-  },
-  {
-    title: "Appointments",
-    value: "342",
-    change: "+12.6%",
-    helper: "Booked from active campaigns",
-    icon: CalendarDays,
-    variant: "success",
-  },
-];
 
 const revenueData = [
   { month: "Jan", revenue: 324000, forecast: 342000 },
@@ -271,7 +246,66 @@ function HealthRow({ name, status, health, variant }: HealthItem) {
   );
 }
 
-export default function DashboardModule() {
+export default function DashboardModule({ widgetMetrics }: { widgetMetrics?: WidgetDashboardMetrics }) {
+  const realKpis: Kpi[] = [
+    {
+      title: "Leads",
+      value: String(widgetMetrics?.leads ?? 0),
+      change: "Live",
+      helper: "Total CRM leads",
+      icon: Users,
+      variant: "success",
+    },
+    {
+      title: "Conversations",
+      value: String(widgetMetrics?.conversations ?? 0),
+      change: "Live",
+      helper: "Inbox conversations",
+      icon: MessageCircle,
+      variant: "info",
+    },
+    {
+      title: "Appointments",
+      value: String(widgetMetrics?.appointments ?? 0),
+      change: "Live",
+      helper: "Calendar booking logs",
+      icon: CalendarDays,
+      variant: "success",
+    },
+    {
+      title: "Sheet Syncs",
+      value: String(widgetMetrics?.sheetSyncs ?? 0),
+      change: "Live",
+      helper: "Google Sheet sync logs",
+      icon: PlugZap,
+      variant: "info",
+    },
+    {
+      title: "AI Chats",
+      value: String(widgetMetrics?.aiChats ?? 0),
+      change: "Live",
+      helper: "AI chat/voice logs",
+      icon: Bot,
+      variant: "info",
+    },
+    {
+      title: "Website Conversations",
+      value: String(widgetMetrics?.websiteConversations ?? 0),
+      change: "Live",
+      helper: "Widget conversations in Inbox",
+      icon: MessageCircle,
+      variant: "info",
+    },
+    {
+      title: "Widget Leads",
+      value: String(widgetMetrics?.widgetLeads ?? 0),
+      change: "CRM",
+      helper: "Source: Website Widget",
+      icon: Users,
+      variant: "success",
+    },
+  ];
+
   return (
     <div className="flex min-h-screen bg-[#07111f] text-white">
       <Sidebar />
@@ -304,7 +338,7 @@ export default function DashboardModule() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-            {kpis.map((metric) => (
+            {realKpis.map((metric) => (
               <MetricCard key={metric.title} metric={metric} />
             ))}
           </div>

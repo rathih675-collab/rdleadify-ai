@@ -19,6 +19,7 @@ function isPublicPath(pathname: string) {
   return (
     publicRoutes.includes(pathname) ||
     pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/widget/") ||
     pathname.startsWith("/_next/") ||
     pathname.startsWith("/favicon.ico")
   );
@@ -66,7 +67,7 @@ export async function proxy(request: NextRequest) {
     const role = String(payload.role ?? "");
 
     if (allowedRoles && !allowedRoles.includes(role)) {
-      return withSecurityHeaders(NextResponse.redirect(new URL("/dashboard", request.url)));
+      return withSecurityHeaders(NextResponse.redirect(new URL("/access-denied", request.url)));
     }
 
     const response = NextResponse.next();

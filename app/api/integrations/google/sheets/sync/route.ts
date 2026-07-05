@@ -1,5 +1,7 @@
 import { Prisma } from "@/lib/generated/prisma/client";
 import { ApiError, assertPermission, paginationFromUrl, readJson, withWorkspace } from "@/lib/server/api";
+import { backendLog } from "@/lib/server/dev-log";
+import { GoogleApiError, appendLeadToGoogleSheet, getGoogleIntegration, missingSheetsEnv } from "@/lib/server/google";
 import { prisma } from "@/lib/server/prisma";
 
 type SheetSyncBody = {
@@ -12,32 +14,30 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
-function hasGoogleCredentials() {
-  return Boolean(
-    process.env.GOOGLE_CLIENT_ID &&
-      process.env.GOOGLE_CLIENT_SECRET &&
-      process.env.GOOGLE_REDIRECT_URI &&
-      process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-  );
-}
-
-function missingGoogleCredentials(): string[] {
-  return [
-    ["GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID],
-    ["GOOGLE_CLIENT_SECRET", process.env.GOOGLE_CLIENT_SECRET],
-    ["GOOGLE_REDIRECT_URI", process.env.GOOGLE_REDIRECT_URI],
-    ["GOOGLE_SHEETS_SPREADSHEET_ID", process.env.GOOGLE_SHEETS_SPREADSHEET_ID],
-    ["APP_URL", process.env.APP_URL],
-  ]
-    .filter(([, value]) => !value)
-    .map(([key]) => String(key));
-}
-
 function hasLeadPayload(lead?: Record<string, unknown>) {
   if (!lead) return false;
-  return ["name", "phone", "email", "business", "requirement", "budget", "summary"].some((key) =>
+  return ["name", "phone", "email", "company", "business", "requirement", "budget", "summary"].some((key) =>
     Boolean(lead[key]),
   );
+}
+
+function text(value: unknown) {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
+function buildSheetRow(lead: Record<string, unknown>, source?: string) {
+  return [
+    text(lead.name),
+    text(lead.phone),
+    text(lead.email),
+    text(lead.company) || text(lead.business),
+    text(lead.requirement),
+    text(lead.budget),
+    text(lead.score) || text(lead.leadScore),
+    source || text(lead.source) || "RDLeadify AI",
+    text(lead.summary) || text(lead.aiSummary),
+    new Date().toISOString(),
+  ];
 }
 
 export async function POST(request: Request) {
@@ -50,34 +50,71 @@ export async function POST(request: Request) {
       throw new ApiError("Missing extracted lead data. Qualify a lead before syncing to Google Sheets.", 422);
     }
 
-    const missingCredentials = missingGoogleCredentials();
-    const demoMode = !hasGoogleCredentials();
+    const integration = await getGoogleIntegration(session.workspaceId);
+    const missingSpreadsheet = missingSheetsEnv();
     const payload = {
       source: body.source ?? "RDLeadify AI",
       lead: body.lead ?? {},
       leadId: body.leadId,
       requestedAt: new Date().toISOString(),
     };
-    const response = demoMode
-      ? {
-          mode: "DEMO",
-          missingCredentials,
-          spreadsheetId: "demo-spreadsheet",
-          rowNumber: Math.floor(Date.now() / 1000) % 10000,
-          message: "Demo sync completed",
-        }
-      : {
-          mode: "REAL_OAUTH_PENDING",
+
+    let response: Record<string, unknown>;
+    let status = "DEMO_SUCCESS";
+    let demoMode = true;
+    let message = "Demo sync completed";
+
+    if (integration && missingSpreadsheet.length) {
+      throw new ApiError("Missing spreadsheet ID.", 400);
+    }
+
+    if (integration) {
+      try {
+        const googleResponse = await appendLeadToGoogleSheet(
+          session.workspaceId,
+          buildSheetRow(body.lead ?? {}, payload.source),
+        );
+        demoMode = false;
+        status = "SYNC_SUCCESS";
+        message = "Sync successful";
+        response = {
+          mode: "REAL",
           spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-          authUrl: `${process.env.APP_URL ?? ""}/api/integrations/google/oauth/start?scope=sheets`,
-          message: "Real sync pending setup. OAuth architecture is ready for the Google Sheets adapter.",
+          google: googleResponse,
+          message,
         };
+      } catch (error) {
+        status = "SYNC_FAILED";
+        demoMode = false;
+        message = error instanceof Error ? error.message : "Google Sheets sync failed.";
+        response = {
+          mode: "REAL",
+          spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+          error: message,
+          ...(error instanceof GoogleApiError
+            ? {
+                diagnostics: error.diagnostics,
+                googleApiErrorCode: error.code,
+                googleApiErrorMessage: error.message,
+                googleApiResponseBody: error.responseBody,
+              }
+            : {}),
+        };
+      }
+    } else {
+      response = {
+        mode: "DEMO",
+        spreadsheetId: "demo-spreadsheet",
+        rowNumber: Math.floor(Date.now() / 1000) % 10000,
+        message,
+      };
+    }
 
     const log = await prisma.googleSheetSyncLog.create({
       data: {
         workspaceId: session.workspaceId,
         leadId: body.leadId,
-        status: demoMode ? "DEMO_SUCCESS" : "REAL_SYNC_PENDING_SETUP",
+        status,
         payload: toJsonValue(payload),
         response: toJsonValue(response),
       },
@@ -102,16 +139,32 @@ export async function POST(request: Request) {
           demoMode,
           status: log.status,
           source: payload.source,
-          missingCredentials,
+          connected: Boolean(integration),
         }),
       },
     });
 
-    return {
-      mode: demoMode ? "DEMO" : "REAL_OAUTH_PENDING",
+    backendLog("google-sheets", "sync attempt saved", {
+      workspaceId: session.workspaceId,
+      logId: log.id,
+      status,
       demoMode,
-      missingCredentials,
-      message: demoMode ? "Demo sync completed" : "Real sync pending setup",
+    });
+
+    if (status === "SYNC_FAILED") {
+      const errorStatus =
+        typeof response.googleApiErrorCode === "number" && response.googleApiErrorCode >= 400
+          ? response.googleApiErrorCode
+          : 502;
+      throw new ApiError(message, errorStatus, response);
+    }
+
+    return {
+      ok: true,
+      mode: demoMode ? "DEMO" : "REAL",
+      demoMode,
+      connected: Boolean(integration),
+      message,
       log,
     };
   });
@@ -120,6 +173,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   return withWorkspace(async (session) => {
     const { take } = paginationFromUrl(request, { take: 10, max: 50 });
+    const integration = await getGoogleIntegration(session.workspaceId);
 
     const logs = await prisma.googleSheetSyncLog.findMany({
       where: { workspaceId: session.workspaceId },
@@ -135,12 +189,12 @@ export async function GET(request: Request) {
       },
     });
 
-    const missingCredentials = missingGoogleCredentials();
     return {
       logs,
-      demoMode: !hasGoogleCredentials(),
-      mode: hasGoogleCredentials() ? "REAL_OAUTH_PENDING" : "DEMO",
-      missingCredentials,
+      demoMode: !integration,
+      connected: Boolean(integration),
+      mode: integration ? "REAL" : "DEMO",
+      missingCredentials: integration ? missingSheetsEnv() : ["Google not connected"],
     };
   });
 }
