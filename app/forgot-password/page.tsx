@@ -6,7 +6,7 @@ export default function ForgotPasswordPage() {
     <AuthShell
       eyebrow="Recovery"
       title="Restore account access without weakening security."
-      description="Password reset uses a short-lived email OTP, CAPTCHA protection, and strong password validation."
+      description="Password reset uses a short-lived email OTP and strong password validation."
     >
       <ForgotPasswordForm />
     </AuthShell>
