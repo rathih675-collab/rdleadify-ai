@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 
-import DashboardModule from "@/components/dashboard/DashboardModule";
+import MvpDashboardModule from "@/components/mvp/MvpDashboardModule";
 import { InboxChannel } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/server/prisma";
 
@@ -18,7 +18,7 @@ async function resolveWorkspaceId() {
 export default async function DashboardPage() {
   const workspaceId = await resolveWorkspaceId();
 
-  if (!workspaceId) return <DashboardModule />;
+  if (!workspaceId) return <MvpDashboardModule />;
 
   const [leads, conversations, appointments, sheetSyncs, aiChats, websiteConversations, widgetLeads] = await Promise.all([
     prisma.lead.count({ where: { workspaceId } }),
@@ -31,8 +31,8 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <DashboardModule
-      widgetMetrics={{
+    <MvpDashboardModule
+      metrics={{
         leads,
         conversations,
         appointments,

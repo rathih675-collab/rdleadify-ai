@@ -1,5 +1,5 @@
-import VoiceAgentPlaygroundModule from "@/components/voice-agent/VoiceAgentPlaygroundModule";
+import VoiceAgentMvpModule from "@/components/mvp/VoiceAgentMvpModule";
 
 export default function VoiceAgentPlaygroundPage() {
-  return <VoiceAgentPlaygroundModule />;
+  return <VoiceAgentMvpModule />;
 }

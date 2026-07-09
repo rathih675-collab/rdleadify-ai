@@ -4,35 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Users,
-  UserRound,
-  Building2,
-  Workflow,
-  Tags,
-  CheckSquare,
-  MessageCircle,
   Bot,
-  Megaphone,
-  ClipboardList,
-  GitBranch,
-  Grid3X3,
-  FileText,
-  Zap,
-  Phone,
-  PhoneCall,
-  Calendar,
+  Inbox,
+  LogOut,
+  Mic2,
+  MessageCircle,
   Plug,
-  UserCog,
-  BarChart3,
+  PhoneCall,
   Settings,
-  KeyRound,
+  Users,
   ChevronRight,
   BotMessageSquare,
-  ShieldCheck,
-  History,
   BrainCircuit,
   Library,
-  Activity,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -42,65 +26,46 @@ const navigationSections = [
     label: "Workspace",
     items: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      { title: "Leads", href: "/leads", icon: Users },
-      { title: "Contacts", href: "/contacts", icon: UserRound },
-      { title: "Companies", href: "/companies", icon: Building2 },
-      { title: "Pipeline", href: "/pipeline", icon: Workflow },
-      { title: "Tags & Labels", href: "/tags-labels", icon: Tags },
-      { title: "Tasks", href: "/tasks", icon: CheckSquare },
+      { title: "Inbox", href: "/inbox", icon: Inbox },
     ],
   },
   {
-    label: "Engagement",
+    label: "AI Core",
     items: [
-      { title: "Inbox", href: "/inbox", icon: MessageCircle },
-      { title: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
-      { title: "AI Agent", href: "/ai-agent", icon: Bot },
-      { title: "Voice Playground", href: "/voice-agent/playground", icon: PhoneCall },
-      { title: "Widget Demo", href: "/widget-demo", icon: BotMessageSquare },
-      { title: "Website Widget", href: "/widget", icon: BotMessageSquare },
-      { title: "Widget Dashboard", href: "/widget-dashboard", icon: BarChart3 },
-      { title: "Voice Campaigns", href: "/voice-campaigns", icon: PhoneCall },
-      { title: "Campaigns", href: "/campaigns", icon: Megaphone },
-      { title: "Drip Campaigns", href: "/drip-campaigns", icon: ClipboardList },
-      { title: "Forms", href: "/forms", icon: FileText },
-      { title: "Calling", href: "/calling", icon: Phone },
-      { title: "Calendar", href: "/calendar", icon: Calendar },
-    ],
-  },
-  {
-    label: "AI Brain",
-    items: [
-      { title: "AI Orchestrator", href: "/ai-orchestrator", icon: BrainCircuit },
-      { title: "Live AI Monitor", href: "/ai-orchestrator/live", icon: Activity },
+      { title: "AI Memory", href: "/ai-memory", icon: BrainCircuit },
+      { title: "AI Chat Agent", href: "/ai-agent", icon: Bot },
+      { title: "AI Voice Agent", href: "/voice-agent/playground", icon: Mic2 },
       { title: "Knowledge Base", href: "/knowledge-base", icon: Library },
-      { title: "Prompt Engine", href: "/ai/prompt-engine", icon: BrainCircuit },
-      { title: "AI Playground", href: "/ai/playground", icon: Bot },
     ],
   },
   {
-    label: "Automation",
+    label: "Website Widget",
     items: [
-      { title: "Automation", href: "/automation", icon: Zap },
-      { title: "AI Drip Campaigns", href: "/ai-drip-campaigns", icon: GitBranch },
-      { title: "Workflow Builder", href: "/workflow-builder", icon: Workflow },
-      { title: "Campaign Analytics", href: "/campaign-analytics", icon: BarChart3 },
-      { title: "Templates", href: "/automation-templates", icon: Grid3X3 },
-      { title: "Execution Logs", href: "/execution-logs", icon: FileText },
+      { title: "Website Widget", href: "/widget", icon: BotMessageSquare },
     ],
   },
   {
-    label: "Operations",
+    label: "Leads",
+    items: [
+      { title: "Leads", href: "/leads", icon: Users },
+    ],
+  },
+  {
+    label: "Channels",
+    items: [
+      { title: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
+      { title: "Voice", href: "/voice", icon: PhoneCall },
+    ],
+  },
+  {
+    label: "Integrations",
     items: [
       { title: "Integrations", href: "/integrations", icon: Plug },
-      { title: "Google Setup", href: "/integrations/google", icon: Plug },
-      { title: "Integration Logs", href: "/integration-logs", icon: FileText },
-      { title: "Team Builder", href: "/team-builder", icon: UserCog },
-      { title: "Reports", href: "/reports", icon: BarChart3 },
-      { title: "API Keys", href: "/api-keys", icon: KeyRound },
-      { title: "Profile", href: "/profile", icon: UserCog },
-      { title: "Login History", href: "/login-history", icon: History },
-      { title: "Auth Settings", href: "/auth-settings", icon: ShieldCheck },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
       { title: "Settings", href: "/settings", icon: Settings },
     ],
   },
@@ -109,12 +74,17 @@ const navigationSections = [
 export default function Sidebar() {
   const pathname = usePathname();
 
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/login");
+  }
+
   return (
     <aside className="hidden min-h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#0b1628] lg:flex">
       <div className="border-b border-white/10 p-6">
         <Link href="/dashboard" className="block">
           <h1 className="text-2xl font-bold text-emerald-400">RDLeadify AI</h1>
-          <p className="mt-1 text-sm text-slate-400">Business Operating System</p>
+          <p className="mt-1 text-sm text-slate-400">AI Employee MVP</p>
         </Link>
       </div>
 
@@ -128,7 +98,7 @@ export default function Sidebar() {
             <div className="space-y-1">
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const active = pathname === item.href;
+                const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(`${item.href}/`));
 
                 return (
                   <Link
@@ -150,6 +120,18 @@ export default function Sidebar() {
                   </Link>
                 );
               })}
+              {section.label === "Settings" ? (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  <span className="flex min-w-0 items-center gap-3">
+                    <LogOut className="h-4 w-4 shrink-0" />
+                    <span className="truncate">Logout</span>
+                  </span>
+                </button>
+              ) : null}
             </div>
           </nav>
         ))}
@@ -157,9 +139,9 @@ export default function Sidebar() {
 
       <div className="border-t border-white/10 p-5">
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4">
-          <p className="text-sm font-semibold text-white">Enterprise Plan</p>
+          <p className="text-sm font-semibold text-white">AI Employee MVP</p>
           <p className="mt-1 text-xs leading-5 text-slate-400">
-            AI-assisted CRM workspace
+            AI chat, voice, widget, inbox, leads, and integrations.
           </p>
         </div>
       </div>

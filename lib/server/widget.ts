@@ -7,7 +7,9 @@ import {
   TaskPriority,
 } from "@/lib/generated/prisma/enums";
 import { detectLanguage } from "@/lib/ai/languages";
+import { buildFinalAiSystemPrompt, type AiContextBundle } from "@/lib/server/ai-memory";
 import { backendLog } from "@/lib/server/dev-log";
+import { GoogleApiError, appendLeadToGoogleSheet, getGoogleIntegration, missingSheetsEnv } from "@/lib/server/google";
 import { prisma } from "@/lib/server/prisma";
 
 export type WidgetMessage = {
@@ -35,6 +37,7 @@ export type WidgetLeadInfo = {
 export type WidgetAnalysis = {
   leadInfo: WidgetLeadInfo;
   score: number;
+  scoreLabel: "Hot" | "Warm" | "Cold";
   status: "New" | "Contacted" | "Qualified" | "Demo Booked";
   tags: string[];
   summary: string;
@@ -42,6 +45,12 @@ export type WidgetAnalysis = {
   missingFields: Array<keyof WidgetLeadInfo>;
   languageName: string;
   detectedLanguage: string;
+};
+
+export type WidgetConversationTurn = {
+  reply: string;
+  analysis: WidgetAnalysis;
+  provider: "openai" | "local";
 };
 
 export type WidgetSettings = {
@@ -62,13 +71,10 @@ const requiredFields: Array<keyof WidgetLeadInfo> = [
   "name",
   "phone",
   "email",
-  "company",
   "business",
   "requirement",
   "budget",
   "timeline",
-  "preferredDemoDate",
-  "preferredDemoTime",
 ];
 
 const fieldLabel: Record<keyof WidgetLeadInfo, string> = {
@@ -96,7 +102,9 @@ function clean(value?: string) {
   return String(value ?? "")
     .trim()
     .replace(/\s+/g, " ")
-    .replace(/^(is|it is|it's)\s+/i, "");
+    .replace(/^(is|it is|it's)\s+/i, "")
+    .replace(/\s+(hai|hain|hu|hoon|hun|h)$/i, "")
+    .replace(/\s+(chahiye|chaahiye|required|needed)$/i, "");
 }
 
 function pickAfter(text: string, markers: string[]) {
@@ -112,6 +120,273 @@ function mergeBareAnswer(info: WidgetLeadInfo, value: string) {
   const field = requiredFields.find((item) => !info[item]);
   const answer = clean(value);
   return field && answer ? { ...info, [field]: answer } : info;
+}
+
+function scoreLabel(score: number): WidgetAnalysis["scoreLabel"] {
+  if (score >= 80) return "Hot";
+  if (score >= 45) return "Warm";
+  return "Cold";
+}
+
+function hasQualifiedLead(analysis: WidgetAnalysis) {
+  return Boolean(analysis.leadInfo.name && (analysis.leadInfo.phone || analysis.leadInfo.email) && analysis.leadInfo.requirement);
+}
+
+function leadPayloadForSheet(analysis: WidgetAnalysis) {
+  return {
+    name: analysis.leadInfo.name,
+    phone: analysis.leadInfo.phone,
+    email: analysis.leadInfo.email,
+    company: analysis.leadInfo.company || analysis.leadInfo.business,
+    business: analysis.leadInfo.business,
+    requirement: analysis.leadInfo.requirement,
+    budget: analysis.leadInfo.budget,
+    source: "Website Widget",
+    score: analysis.score,
+    leadScore: analysis.scoreLabel,
+    summary: analysis.summary,
+    aiSummary: analysis.summary,
+  };
+}
+
+function text(value: unknown) {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
+function buildSheetRow(analysis: WidgetAnalysis) {
+  const lead = leadPayloadForSheet(analysis);
+  return [
+    text(lead.name),
+    text(lead.phone),
+    text(lead.email),
+    text(lead.company),
+    text(lead.requirement),
+    text(lead.budget),
+    "Website Widget",
+    `${analysis.scoreLabel} (${analysis.score})`,
+    text(lead.summary),
+    new Date().toISOString(),
+  ];
+}
+
+function contextHasAnswerSource(aiContext?: AiContextBundle) {
+  if (!aiContext) return false;
+  const business = aiContext.businessMemory;
+  const hasBusinessMemory = Boolean(
+    business?.businessName ||
+      business?.services ||
+      business?.products ||
+      business?.pricing ||
+      business?.faqs ||
+      business?.workingHours ||
+      business?.address ||
+      business?.contactDetails,
+  );
+  return hasBusinessMemory || aiContext.knowledge.length > 0;
+}
+
+function asksBusinessKnowledge(message: string) {
+  return /(rdleadify|kya karta|kya karti|what do you do|what does|price|pricing|cost|service|product|hours|timing|address|location|contact|faq|feature|plan|package|refund|support|kya price|kitna|fees|charges)/i.test(
+    message,
+  );
+}
+
+function teamHandoff(languageId: string) {
+  if (languageId === "hi") return "Main aapko hamari team se connect kar dungi.";
+  if (languageId === "hinglish") return "Main aapko hamari team se connect kar dungi.";
+  return "I'll connect you with our team.";
+}
+
+function localBusinessAnswer(settings: WidgetSettings, aiContext: AiContextBundle | undefined, languageId: string) {
+  const business = aiContext?.businessMemory;
+  const answer = [
+    business?.businessName || settings.companyName,
+    business?.description,
+    business?.services,
+    business?.products,
+    business?.pricing,
+  ].filter(Boolean).join(" ");
+
+  const fallback = `${settings.companyName} helps businesses capture website visitors, qualify leads with AI chat and voice agents, sync leads to Google Sheets, and prepare demo booking.`;
+  if (languageId === "hi" || languageId === "hinglish") {
+    return `${settings.companyName} website visitors ko AI chat aur voice agent se qualify karta hai, lead details capture karta hai, Google Sheet sync karta hai, aur demo booking ke liye ready karta hai.`;
+  }
+  return answer || fallback;
+}
+
+function naturalQuestion(field: keyof WidgetLeadInfo, languageId: string) {
+  const questions: Record<string, Partial<Record<keyof WidgetLeadInfo, string>>> = {
+    en: {
+      name: "May I know your name?",
+      phone: "What phone number should our team use for follow-up?",
+      email: "Please share your email as well.",
+      business: "What kind of business do you run?",
+      requirement: "What are you trying to solve right now?",
+      budget: "What budget range should we plan around?",
+      timeline: "When do you want to get this live?",
+    },
+    hi: {
+      name: "Aapka naam kya hai?",
+      phone: "Follow-up ke liye phone number share kar dijiye.",
+      email: "Email bhi share kar dijiye.",
+      business: "Aap kis type ka business run karte hain?",
+      requirement: "Abhi aapko kis cheez mein help chahiye?",
+      budget: "Iske liye aapka budget range kya hai?",
+      timeline: "Aap ise kab tak live karna chahte hain?",
+    },
+    hinglish: {
+      name: "Aapka naam kya hai?",
+      phone: "Follow-up ke liye phone number share kar doge?",
+      email: "Email bhi share kar dijiye.",
+      business: "Aap kis type ka business run karte ho?",
+      requirement: "Abhi aapko exactly kis cheez mein help chahiye?",
+      budget: "Iske liye budget range kya socha hai?",
+      timeline: "Aap ise kab tak start/live karna chahte ho?",
+    },
+  };
+
+  return questions[languageId]?.[field] || questions.en[field] || "Can you share a few more details?";
+}
+
+function safeJsonObject(value: string) {
+  const trimmed = value.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const candidate = fenced || trimmed;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+
+  try {
+    return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function stringField(record: Record<string, unknown>, key: keyof WidgetLeadInfo) {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? clean(value).slice(0, 500) : undefined;
+}
+
+function mergeAiLeadInfo(previous: WidgetLeadInfo, record: Record<string, unknown> | null) {
+  if (!record) return previous;
+  const leadInfo = typeof record.leadInfo === "object" && record.leadInfo ? record.leadInfo as Record<string, unknown> : record;
+
+  return {
+    ...previous,
+    name: stringField(leadInfo, "name") ?? previous.name,
+    phone: stringField(leadInfo, "phone") ?? previous.phone,
+    email: stringField(leadInfo, "email") ?? previous.email,
+    company: stringField(leadInfo, "company") ?? previous.company,
+    business: stringField(leadInfo, "business") ?? previous.business,
+    requirement: stringField(leadInfo, "requirement") ?? previous.requirement,
+    budget: stringField(leadInfo, "budget") ?? previous.budget,
+    timeline: stringField(leadInfo, "timeline") ?? previous.timeline,
+    preferredDemoDate: stringField(leadInfo, "preferredDemoDate") ?? previous.preferredDemoDate,
+    preferredDemoTime: stringField(leadInfo, "preferredDemoTime") ?? previous.preferredDemoTime,
+    country: stringField(leadInfo, "country") ?? previous.country,
+    timezone: stringField(leadInfo, "timezone") ?? previous.timezone,
+  };
+}
+
+async function createWidgetAiConversationTurn(input: {
+  messages: WidgetMessage[];
+  leadInfo?: WidgetLeadInfo;
+  language?: string;
+  settings: WidgetSettings;
+  aiContext?: AiContextBundle;
+  capturedFields?: WidgetLeadInfo;
+  missingFields?: Array<keyof WidgetLeadInfo>;
+}) {
+  const promptBuild = buildFinalAiSystemPrompt({
+    businessPrompt: `You are ${input.settings.agentName}, a human-like sales executive for ${input.settings.companyName}.`,
+    aiContext: input.aiContext ?? {
+      businessMemory: null,
+      knowledge: [],
+      visitorMemory: null,
+      prompt: "No business memory or knowledge base was loaded.",
+    },
+    messages: input.messages,
+    capturedFields: input.capturedFields ?? input.leadInfo ?? {},
+    missingFields: input.missingFields?.map(String) ?? [],
+    responseRules: [
+      "You are the AI sales assistant for this business. Behave like a real human sales executive.",
+      "Every reply must feel like a natural conversation, not a form or fixed script.",
+      "Answer the visitor's latest question first using Business Memory, Knowledge Base, FAQ, Pricing Rules, Appointment Rules, and Guardrails.",
+      `If the answer is not in memory or knowledge, reply with the meaning of: "${teamHandoff("en")}" in the visitor's language.`,
+      "Only ask one missing qualification question when useful, after answering the user's question.",
+      "Silently extract lead fields from normal conversation: name, phone, email, company, business, requirement, budget, timeline, preferredDemoDate, preferredDemoTime, country, timezone.",
+      "Never ask for the same information twice when it exists in Conversation Memory or captured fields.",
+      "Never use Step 1, Step 2, fixed forms, numbered qualification flow, or robotic scoring language.",
+      "Return only valid JSON with shape: {\"reply\":\"...\",\"leadInfo\":{...}}.",
+      `Preferred language setting: ${input.language || input.settings.language}. Continue in English, Hindi, or Hinglish based on the visitor.`,
+    ],
+  });
+  const payload = {
+    model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+    temperature: 0.35,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: promptBuild.finalSystemPrompt,
+      },
+      ...input.messages.map((message) => ({ role: message.role, content: message.content })),
+    ],
+  };
+  console.log("[OpenAI Request]", { source: "widget", payload });
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) throw new Error("OpenAI widget conversation request failed");
+  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  console.log("[OpenAI Response]", { source: "widget", data });
+  const record = safeJsonObject(data.choices?.[0]?.message?.content ?? "");
+  const reply = typeof record?.reply === "string" && record.reply.trim() ? record.reply.trim() : "";
+  const leadInfo = mergeAiLeadInfo(input.leadInfo ?? {}, record);
+
+  if (!reply) throw new Error("OpenAI widget conversation returned no reply");
+  return { reply, leadInfo };
+}
+
+function localAgentReply(messages: WidgetMessage[], analysis: WidgetAnalysis, settings: WidgetSettings, aiContext?: AiContextBundle) {
+  const latestUser = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+  const languageId = analysis.detectedLanguage;
+  const visitor = aiContext?.visitorMemory;
+  const returningPrefix =
+    visitor && visitor.previousConversations > 0 && !analysis.leadInfo.name
+      ? languageId === "en"
+        ? `Welcome back${visitor.name ? `, ${visitor.name}` : ""}. `
+        : `Welcome back${visitor.name ? `, ${visitor.name}` : ""}. `
+      : "";
+
+  const asksAboutRdleadify = /rdleadify/i.test(latestUser);
+  if (asksBusinessKnowledge(latestUser) && !contextHasAnswerSource(aiContext) && !asksAboutRdleadify) {
+    return `${returningPrefix}${teamHandoff(languageId)}`;
+  }
+
+  const answerPrefix = asksBusinessKnowledge(latestUser) ? `${localBusinessAnswer(settings, aiContext, languageId)} ` : "";
+
+  if (analysis.missingFields.length > 0) {
+    const question = naturalQuestion(analysis.missingFields[0], languageId);
+    if (languageId === "hi") return `${returningPrefix}${answerPrefix}Samajh gaya. ${question}`;
+    if (languageId === "hinglish") return `${returningPrefix}${answerPrefix}Got it. ${question}`;
+    return `${returningPrefix}${answerPrefix}Got it. ${question}`;
+  }
+
+  if (languageId === "hi") {
+    return `${returningPrefix}Perfect, details capture ho gayi hain. ${analysis.summary} Main lead CRM mein save kar rahi hoon aur Google Sheet sync enable kar rahi hoon. Kya aap demo booking karna chahenge?`;
+  }
+  if (languageId === "hinglish") {
+    return `${returningPrefix}Perfect, details capture ho gayi hain. ${analysis.summary} Main lead CRM mein save kar rahi hoon aur Google Sheet sync enable kar rahi hoon. Demo book karna chahoge?`;
+  }
+  return `${returningPrefix}Perfect, I have the details. ${analysis.summary} I am saving this lead to CRM and enabling Google Sheet sync. Would you like to book a demo next?`;
 }
 
 export function getDefaultWidgetSettings(overrides: Partial<WidgetSettings> = {}): WidgetSettings {
@@ -165,10 +440,12 @@ export function analyzeWidgetLead(
   const timeMatch = text.match(/(?:\d{1,2}(?::\d{2})?\s?(?:am|pm)|morning|afternoon|evening|today|tomorrow)/i);
   const dateMatch = text.match(/(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)/i);
 
-  const name = pickAfter(text, ["my name is", "i am", "i'm", "name is", "this is"]);
+  const name = pickAfter(text, ["my name is", "mera naam", "mera name", "main", "mai", "i am", "i'm", "name is", "this is"]);
   const company = pickAfter(text, ["company is", "from company", "from", "at"]);
   const business = pickAfter(text, ["business type is", "business is", "we run", "i run"]);
-  const requirement = pickAfter(text, ["requirement is", "need", "looking for", "want", "interested in"]);
+  const requirement =
+    text.match(/(?:mujhe|hume|humko|i need|we need)\s+(.+?)\s+(?:chahiye|chaahiye|needed|required)(?:[,.]|\n|$)/i)?.[1] ||
+    pickAfter(text, ["requirement is", "mujhe", "hume", "humko", "need", "looking for", "want", "interested in"]);
   const timeline = pickAfter(text, ["timeline is", "timeline", "by", "within"]);
 
   if (name) leadInfo.name = name.split(/\s+(?:and|from|with|email|phone)\s+/i)[0];
@@ -194,7 +471,7 @@ export function analyzeWidgetLead(
   if (leadInfo.name) score += 8;
   if (leadInfo.phone) score += 10;
   if (leadInfo.email) score += 10;
-  if (leadInfo.company) score += 8;
+  if (leadInfo.company) score += 6;
   if (leadInfo.business) score += 10;
   if (leadInfo.requirement) score += 18;
   if (leadInfo.budget) score += 14;
@@ -208,8 +485,9 @@ export function analyzeWidgetLead(
   leadInfo.country ||= detected.countries[0] ?? "Not captured";
 
   const tags = new Set(["Website Lead", "AI Qualified"]);
+  const label = scoreLabel(score);
+  tags.add(`${label} Lead`);
   if (score >= 70) tags.add("Qualified");
-  if (score >= 85) tags.add("Hot Lead");
   if (leadInfo.budget) tags.add("Budget Shared");
   if (leadInfo.preferredDemoDate || leadInfo.preferredDemoTime) tags.add("Demo Requested");
   if (/voice|call/i.test(text)) tags.add("Voice Interest");
@@ -231,51 +509,65 @@ export function analyzeWidgetLead(
   return {
     leadInfo,
     score,
+    scoreLabel: label,
     status,
     tags: Array.from(tags),
     summary,
     nextAction: missingFields.length
-      ? `Please share your ${fieldLabel[missingFields[0]]}.`
-      : "Lead is qualified. Create CRM lead, sync Google Sheet, and book calendar appointment.",
+      ? naturalQuestion(missingFields[0], detected.id)
+      : "Lead is qualified. Create CRM lead, sync Google Sheet, and offer demo booking.",
     missingFields,
     languageName: detected.name,
     detectedLanguage: detected.id,
   };
 }
 
-export async function createWidgetReply(messages: WidgetMessage[], analysis: WidgetAnalysis, settings: WidgetSettings) {
-  if (!process.env.OPENAI_API_KEY) {
-    return analysis.missingFields.length
-      ? `Thanks. ${analysis.nextAction}`
-      : `Perfect, I have everything needed. ${analysis.summary} I can send this to CRM and prepare a demo appointment now.`;
+export async function runWidgetConversationTurn(input: {
+  messages: WidgetMessage[];
+  leadInfo?: WidgetLeadInfo;
+  language?: string;
+  settings: WidgetSettings;
+  aiContext?: AiContextBundle;
+}): Promise<WidgetConversationTurn> {
+  const memory = input.aiContext?.visitorMemory;
+  const hydratedLeadInfo: WidgetLeadInfo = {
+    ...input.leadInfo,
+    name: input.leadInfo?.name ?? memory?.name ?? undefined,
+    phone: input.leadInfo?.phone ?? memory?.phone ?? undefined,
+    email: input.leadInfo?.email ?? memory?.email ?? undefined,
+    business: input.leadInfo?.business ?? memory?.business ?? undefined,
+    requirement: input.leadInfo?.requirement ?? memory?.previousRequirements[0] ?? undefined,
+    preferredLanguage: input.leadInfo?.preferredLanguage ?? memory?.preferredLanguage ?? undefined,
+  };
+  const preliminaryAnalysis = analyzeWidgetLead(input.messages, hydratedLeadInfo, input.language || input.settings.language);
+
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const aiTurn = await createWidgetAiConversationTurn({
+        ...input,
+        leadInfo: hydratedLeadInfo,
+        capturedFields: preliminaryAnalysis.leadInfo,
+        missingFields: preliminaryAnalysis.missingFields,
+      });
+      const analysis = analyzeWidgetLead(input.messages, aiTurn.leadInfo, input.language || input.settings.language);
+
+      return {
+        reply: aiTurn.reply,
+        analysis,
+        provider: "openai",
+      };
+    } catch (error) {
+      backendLog("widget", "AI conversation failed, using local adaptive fallback", {
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-      temperature: 0.35,
-      messages: [
-        {
-          role: "system",
-          content: `You are ${settings.agentName}, ${settings.position} for ${settings.companyName}. Qualify website visitors by collecting name, phone, email, company, business type, requirement, budget, timeline, preferred demo date, and preferred demo time. Reply in ${analysis.languageName}. Keep replies under 80 words. Support markdown when useful.`,
-        },
-        ...messages,
-        {
-          role: "system",
-          content: `Extracted lead data: ${JSON.stringify(analysis)}. Ask only for the next missing field: ${analysis.nextAction}.`,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) throw new Error("OpenAI widget request failed");
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return data.choices?.[0]?.message?.content?.trim() || `Thanks. ${analysis.nextAction}`;
+  return {
+    reply: localAgentReply(input.messages, preliminaryAnalysis, input.settings, input.aiContext),
+    analysis: preliminaryAnalysis,
+    provider: "local",
+  };
 }
 
 function splitName(name?: string) {
@@ -302,7 +594,7 @@ export async function persistWidgetConversation(input: {
 }) {
   const { workspaceId, conversationId, visitorId, messages, reply, analysis, pageUrl, referrer, forceLead } = input;
   const leadInfo = analysis.leadInfo;
-  const shouldCreateLead = Boolean(forceLead || analysis.score >= 55 || leadInfo.email || leadInfo.phone);
+  const shouldCreateLead = Boolean(forceLead || hasQualifiedLead(analysis) || analysis.score >= 55 || leadInfo.email || leadInfo.phone);
   const { firstName, lastName } = splitName(leadInfo.name);
   const widgetLeadId = `widget_${visitorId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) || crypto.randomUUID()}`;
   const notes = [
@@ -352,7 +644,7 @@ export async function persistWidgetConversation(input: {
             tags: {
               connectOrCreate: analysis.tags.slice(0, 10).map((tag) => ({
                 where: { workspaceId_name: { workspaceId, name: tag } },
-                create: { workspaceId, name: tag, color: tag === "Hot Lead" ? "#10b981" : "#38bdf8" },
+                create: { workspaceId, name: tag, color: tag === "Hot Lead" ? "#10b981" : tag === "Warm Lead" ? "#f59e0b" : "#38bdf8" },
               })),
             },
           },
@@ -378,7 +670,7 @@ export async function persistWidgetConversation(input: {
             tags: {
               connectOrCreate: analysis.tags.slice(0, 10).map((tag) => ({
                 where: { workspaceId_name: { workspaceId, name: tag } },
-                create: { workspaceId, name: tag, color: tag === "Hot Lead" ? "#10b981" : "#38bdf8" },
+                create: { workspaceId, name: tag, color: tag === "Hot Lead" ? "#10b981" : tag === "Warm Lead" ? "#f59e0b" : "#38bdf8" },
               })),
             },
           },
@@ -406,11 +698,11 @@ export async function persistWidgetConversation(input: {
       language: analysis.languageName,
       leadScore: analysis.score,
       aiSummary: analysis.summary,
-      buyingIntent: analysis.score >= 70 ? "High" : analysis.score >= 45 ? "Medium" : "Low",
+      buyingIntent: analysis.scoreLabel,
       sentiment: "Positive",
       recommendedNextAction: analysis.nextAction,
       tags: analysis.tags,
-      metadata: toJsonValue({ visitorId, pageUrl, referrer, leadInfo }),
+      metadata: toJsonValue({ visitorId, pageUrl, referrer, leadInfo, leadScore: analysis.scoreLabel }),
     },
     create: {
       workspaceId,
@@ -427,11 +719,11 @@ export async function persistWidgetConversation(input: {
       language: analysis.languageName,
       leadScore: analysis.score,
       aiSummary: analysis.summary,
-      buyingIntent: analysis.score >= 70 ? "High" : analysis.score >= 45 ? "Medium" : "Low",
+      buyingIntent: analysis.scoreLabel,
       sentiment: "Positive",
       recommendedNextAction: analysis.nextAction,
       tags: analysis.tags,
-      metadata: toJsonValue({ visitorId, pageUrl, referrer, leadInfo }),
+      metadata: toJsonValue({ visitorId, pageUrl, referrer, leadInfo, leadScore: analysis.scoreLabel }),
     },
     select: { id: true },
   });
@@ -487,7 +779,102 @@ export async function persistWidgetConversation(input: {
     duplicatePrevented: Boolean(existingLead),
   });
 
-  return { lead, inboxConversationId: inbox.id };
+  const sheetSync = lead ? await autoSyncWidgetLeadToGoogleSheet(workspaceId, lead.id, analysis, conversationId) : null;
+
+  return { lead, inboxConversationId: inbox.id, sheetSync };
+}
+
+async function autoSyncWidgetLeadToGoogleSheet(
+  workspaceId: string,
+  leadId: string,
+  analysis: WidgetAnalysis,
+  conversationId: string,
+) {
+  const existing = await prisma.googleSheetSyncLog.findFirst({
+    where: {
+      workspaceId,
+      leadId,
+      status: { in: ["SYNC_SUCCESS", "DEMO_SUCCESS"] },
+    },
+    select: { id: true, status: true },
+  });
+
+  if (existing) return { skipped: true, reason: "Already synced", log: existing };
+
+  const integration = await getGoogleIntegration(workspaceId);
+  const missingSpreadsheet = missingSheetsEnv();
+  const payload = {
+    source: "Website Widget",
+    lead: leadPayloadForSheet(analysis),
+    leadId,
+    conversationId,
+    requestedAt: new Date().toISOString(),
+    automatic: true,
+  };
+  let response: Record<string, unknown>;
+  let status = "DEMO_SUCCESS";
+  let mode = "DEMO";
+
+  try {
+    if (integration) {
+      if (missingSpreadsheet.length) throw new Error("Missing spreadsheet ID.");
+      const google = await appendLeadToGoogleSheet(workspaceId, buildSheetRow(analysis));
+      response = {
+        mode: "REAL",
+        spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+        google,
+        message: "Sync successful",
+      };
+      status = "SYNC_SUCCESS";
+      mode = "REAL";
+    } else {
+      response = {
+        mode: "DEMO",
+        spreadsheetId: "demo-spreadsheet",
+        rowNumber: Math.floor(Date.now() / 1000) % 10000,
+        message: "Demo sync completed",
+      };
+    }
+  } catch (error) {
+    status = "SYNC_FAILED";
+    mode = integration ? "REAL" : "DEMO";
+    response = {
+      mode,
+      error: error instanceof Error ? error.message : "Google Sheet sync failed.",
+      ...(error instanceof GoogleApiError
+        ? {
+            diagnostics: error.diagnostics,
+            googleApiErrorCode: error.code,
+            googleApiErrorMessage: error.message,
+            googleApiResponseBody: error.responseBody,
+          }
+        : {}),
+    };
+  }
+
+  const log = await prisma.googleSheetSyncLog.create({
+    data: {
+      workspaceId,
+      leadId,
+      status,
+      payload: toJsonValue(payload),
+      response: toJsonValue(response),
+    },
+    select: { id: true, status: true, response: true, createdAt: true },
+  });
+
+  await prisma.activityLog.create({
+    data: {
+      workspaceId,
+      leadId,
+      action: "WIDGET_AUTO_GOOGLE_SHEET_SYNC",
+      entityType: "GoogleSheetSyncLog",
+      entityId: log.id,
+      metadata: toJsonValue({ source: "Website Widget", conversationId, mode, status }),
+    },
+  });
+
+  return { skipped: false, mode, log };
 }
 
 export async function queueWidgetVoiceFollowUp(input: {

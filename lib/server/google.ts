@@ -15,6 +15,18 @@ export const googleScopes = [
 
 const integrationProvider = "google";
 const integrationName = "Google Workspace";
+export const googleSheetLeadHeaders = [
+  "Name",
+  "Phone",
+  "Email",
+  "Company",
+  "Requirement",
+  "Budget",
+  "Source",
+  "Lead Score",
+  "Summary",
+  "Created At",
+];
 
 type GoogleTokenSet = {
   access_token: string;
@@ -439,16 +451,17 @@ export async function appendLeadToGoogleSheet(workspaceId: string, row: string[]
   const runAppend = async (context: GoogleAccessContext) => {
     const metadata = await fetchSpreadsheetMetadata(spreadsheetId, context);
     const worksheetName = resolveWorksheetName(metadata, preferredWorksheet);
+    await ensureGoogleSheetHeaders(spreadsheetId, worksheetName, context);
     const range = `${escapeSheetName(worksheetName)}!A:J`;
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       {
         method: "POST",
         headers: {
           Authorization: `Bearer ${context.accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ values: [row] }),
+        body: JSON.stringify({ values: [row.map(toPlainSheetCell)] }),
       },
     );
 
@@ -501,6 +514,71 @@ export async function appendLeadToGoogleSheet(workspaceId: string, row: string[]
 
     throw error;
   }
+}
+
+async function ensureGoogleSheetHeaders(spreadsheetId: string, worksheetName: string, context: GoogleAccessContext) {
+  const headerRange = `${escapeSheetName(worksheetName)}!A1:J1`;
+  const getResponse = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(headerRange)}?majorDimension=ROWS`,
+    {
+      headers: {
+        Authorization: `Bearer ${context.accessToken}`,
+      },
+    },
+  );
+
+  if (!getResponse.ok) {
+    await throwGoogleSheetsError(getResponse, {
+      spreadsheetId,
+      worksheetName,
+      authenticatedEmail: context.authenticatedEmail,
+      accessTokenStatus: context.accessTokenStatus,
+      refreshTokenStatus: context.refreshTokenStatus,
+      scopes: context.scopes,
+      hasSheetsScope: context.scopes.includes("https://www.googleapis.com/auth/spreadsheets"),
+      operation: "values.get.headers",
+    });
+  }
+
+  const headerData = (await getResponse.json()) as { values?: string[][] };
+  const firstRow = headerData.values?.[0] ?? [];
+  const rowIsEmpty = firstRow.length === 0 || firstRow.every((cell) => !String(cell ?? "").trim());
+  if (!rowIsEmpty) return;
+
+  const updateResponse = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(headerRange)}?valueInputOption=RAW`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${context.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values: [googleSheetLeadHeaders] }),
+    },
+  );
+
+  if (!updateResponse.ok) {
+    await throwGoogleSheetsError(updateResponse, {
+      spreadsheetId,
+      worksheetName,
+      authenticatedEmail: context.authenticatedEmail,
+      accessTokenStatus: context.accessTokenStatus,
+      refreshTokenStatus: context.refreshTokenStatus,
+      scopes: context.scopes,
+      hasSheetsScope: context.scopes.includes("https://www.googleapis.com/auth/spreadsheets"),
+      operation: "values.update.headers",
+    });
+  }
+
+  backendLog("google-sheets", "headers added", {
+    spreadsheetId,
+    worksheetName,
+    headers: googleSheetLeadHeaders,
+  });
+}
+
+function toPlainSheetCell(value: unknown) {
+  return String(value ?? "").replace(/[\u0000-\u001F\u007F]/g, " ").trim();
 }
 
 async function fetchSpreadsheetMetadata(spreadsheetId: string, context: GoogleAccessContext): Promise<SheetMetadata> {

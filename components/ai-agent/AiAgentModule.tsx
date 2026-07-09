@@ -191,6 +191,7 @@ type DemoLog = {
 
 type MemoryItem = {
   id: string;
+  type?: "Previous Conversation" | "Lead Update" | "Demo Booking" | "AI Summary" | string;
   title: string;
   detail: string;
   time: string;
@@ -268,11 +269,11 @@ const fieldLabels: Record<keyof LeadInfo, string> = {
 };
 
 const questionByField: Record<RequiredField, string> = {
-  name: "Step 1: What is your name?",
-  business: "Step 2: What type of business do you run?",
-  requirement: "Step 3: What do you need help with?",
-  budget: "Step 4: What budget range should we plan around?",
-  demoTime: "Step 5: What is your preferred demo time?",
+  name: "May I know your name?",
+  business: "What kind of business do you run?",
+  requirement: "What are you trying to solve right now?",
+  budget: "What budget range should we plan around?",
+  demoTime: "What demo time works best for you?",
 };
 
 const voiceLabels = voiceLanguageOptions.map((voice) => voice.label);
@@ -405,7 +406,7 @@ const initialAnalysis: LeadAnalysis = {
   status: "New",
   tags: ["AI Agent", "Needs Qualification"],
   summary: "Start a guided conversation to qualify the lead.",
-  nextAction: questionByField.name,
+  nextAction: "Answer the visitor first, then ask for one missing detail naturally.",
   missingFields: [...requiredFields],
   priority: "Low",
   detectedLanguage: "en",
@@ -417,7 +418,7 @@ const initialMessages: ChatMessage[] = [
   {
     id: "assistant-0",
     role: "assistant",
-    content: "Hi, I am RDLeadify AI. I will qualify this lead in five quick steps. Step 1: What is your name?",
+    content: "Hi, I am RDLeadify AI. Tell me what you are looking for, and I will help with the right next step.",
   },
 ];
 
@@ -849,6 +850,8 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceTranscriptRef = useRef("");
   const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
+  const [memoryTimeline, setMemoryTimeline] = useState<MemoryItem[]>([]);
+  const [memoryLoadState, setMemoryLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [conversationLoadState, setConversationLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [clientTimestamps, setClientTimestamps] = useState<Record<string, string>>({});
 
@@ -884,6 +887,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
 
   useEffect(() => {
     void loadConversations();
+    void loadMemoryTimeline();
     void refreshGoogleIntegration();
   }, []);
 
@@ -927,8 +931,13 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       nextTimestamps[`log-${log.id}`] = timeFormatter.format(new Date(log.createdAt));
     }
 
+    for (const item of memoryTimeline) {
+      const parsed = new Date(item.time);
+      nextTimestamps[`memory-${item.id}`] = Number.isNaN(parsed.getTime()) ? item.time : dateTimeFormatter.format(parsed);
+    }
+
     setClientTimestamps(nextTimestamps);
-  }, [logs, savedConversations]);
+  }, [logs, memoryTimeline, savedConversations]);
 
   const analytics = useMemo(() => {
     const boost = demoMode ? 12 : 0;
@@ -943,12 +952,14 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
     };
   }, [appointmentSaved, demoMode, stats.chats, stats.qualifiedLeads]);
 
-  const memoryTimeline: MemoryItem[] = [
-    { id: "mem-1", title: "Customer name", detail: activeAnalysis.leadInfo.name || "Waiting to capture", time: "Live" },
-    { id: "mem-2", title: "Business", detail: activeAnalysis.leadInfo.business || "Waiting to capture", time: "Live" },
-    { id: "mem-3", title: "Previous conversation", detail: messages.length > 1 ? messages[messages.length - 1].content : "No prior context yet", time: "Current session" },
-    { id: "mem-4", title: "Preferences", detail: `${settings.language}, ${settings.tone}, ${settings.responseLength}`, time: "Saved setting" },
-  ];
+  const liveMemoryTimeline: MemoryItem[] = memoryTimeline.length
+    ? memoryTimeline
+    : [
+        { id: "live-name", type: "AI Summary", title: "Customer name", detail: activeAnalysis.leadInfo.name || "Waiting to capture", time: "Live" },
+        { id: "live-business", type: "Lead Update", title: "Business", detail: activeAnalysis.leadInfo.business || "Waiting to capture", time: "Live" },
+        { id: "live-conversation", type: "Previous Conversation", title: "Current conversation", detail: messages.length > 1 ? messages[messages.length - 1].content : "No prior context yet", time: "Current session" },
+        { id: "live-preferences", type: "AI Summary", title: "Preferences", detail: `${settings.language}, ${settings.tone}, ${settings.responseLength}`, time: "Saved setting" },
+      ];
 
   function addLog(action: DemoLog["action"], entityType: DemoLog["entityType"], metadata: DemoLog["metadata"] = {}) {
     setLogs((current) => [
@@ -977,6 +988,19 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
     }
   }
 
+  async function loadMemoryTimeline() {
+    setMemoryLoadState("loading");
+    try {
+      const response = await fetch("/api/ai/memory");
+      if (!response.ok) throw new Error("Unable to load memory timeline");
+      const data = (await response.json()) as { timeline?: MemoryItem[] };
+      setMemoryTimeline(data.timeline ?? []);
+      setMemoryLoadState("idle");
+    } catch {
+      setMemoryLoadState("error");
+    }
+  }
+
   async function persistVoiceConversation(transcript: string, nextAnalysis: LeadAnalysis) {
     try {
       const response = await fetch("/api/ai/conversations", {
@@ -995,6 +1019,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       if (data.conversation) {
         setSavedConversations((current) => [data.conversation as SavedConversation, ...current]);
         setCurrentConversationId(data.conversation.id);
+        void loadMemoryTimeline();
       }
     } catch {
       // Voice logging is helpful for demos, but should not block the live voice flow.
@@ -1018,6 +1043,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
             : conversation,
         ),
       );
+      void loadMemoryTimeline();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not convert conversation.");
     }
@@ -1054,19 +1080,26 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, leadInfo: liveAnalysis.leadInfo, systemPrompt: selectedAgent.systemPrompt, languagePreference }),
+        body: JSON.stringify({
+          messages: nextMessages,
+          leadInfo: liveAnalysis.leadInfo,
+          systemPrompt: selectedAgent.systemPrompt,
+          languagePreference,
+          conversationId: currentConversationId,
+        }),
       });
       const data = (await response.json()) as ChatResponse;
       const finalAnalysis = data.analysis ?? liveAnalysis;
-      const reply = finalAnalysis.missingFields.length
-        ? data.reply
-        : "Great, the lead profile is complete. I generated the score, tags, priority, summary, and recommended next action.";
+      const reply = data.reply || finalAnalysis.nextAction;
 
       setMessages([...nextMessages, { id: `assistant-${Date.now()}`, role: "assistant", content: reply }]);
       setAnalysis(finalAnalysis);
       setProvider(data.provider);
       setCurrentConversationId(data.conversationId);
-      if (data.conversationId) void loadConversations();
+      if (data.conversationId) {
+        void loadConversations();
+        void loadMemoryTimeline();
+      }
       setStats((current) => ({
         ...current,
         chats: current.chats + 1,
@@ -1085,6 +1118,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
     setAnalysis(initialAnalysis);
     setChatInput("");
     setChatSaveState("idle");
+    setCurrentConversationId(undefined);
     addLog("CONVERSATION_STARTED", "AIConversation", { channel: "chat", reset: true });
   }
 
@@ -1182,15 +1216,21 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       const response = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...targetAnalysis, conversationId: currentConversationId }),
+        body: JSON.stringify({
+          ...targetAnalysis,
+          source: source === "voice" ? "AI Chat" : "AI Chat",
+          tags: Array.from(new Set([...targetAnalysis.tags, "AI Qualified"])),
+          conversationId: currentConversationId,
+        }),
       });
-      const data = (await response.json()) as { lead?: { id?: string }; error?: string };
+      const data = (await response.json()) as { lead?: { id?: string }; error?: string; duplicatePrevented?: boolean };
       if (!response.ok) throw new Error(data.error ?? "Save failed");
       setState("saved");
       setLastSavedLeadId(data.lead?.id);
-      setToast("Lead saved successfully in CRM.");
+      setToast(data.duplicatePrevented ? "Existing lead updated in CRM." : "Lead saved successfully in CRM.");
       setStats((current) => ({ ...current, savedLeads: current.savedLeads + 1 }));
       addLog("LEAD_SAVED", "Lead", { channel: source, leadId: data.lead?.id ?? "crm-lead", score: targetAnalysis.score });
+      void loadMemoryTimeline();
     } catch (error) {
       setState("error");
       setToast(error instanceof Error ? error.message : "Could not save the lead.");
@@ -1215,18 +1255,20 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: lastSavedLeadId,
-          source: "AI Agent",
+          source: "AI Chat",
           lead: {
             name: info.name,
             phone: info.phone,
             email: info.email,
+            company: info.company,
             business: info.business,
             requirement: info.requirement,
             budget: info.budget,
             leadScore: targetAnalysis.score,
             tags: targetAnalysis.tags,
-            source: "AI Agent",
+            source: "AI Chat",
             aiSummary: targetAnalysis.summary,
+            summary: targetAnalysis.summary,
             status: targetAnalysis.status,
           },
         }),
@@ -1238,6 +1280,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       setLatestGoogleResult(`Sheet: ${data.log?.status ?? "SUCCESS"} (${data.log?.id ?? "log saved"})`);
       addLog("GOOGLE_SHEET_SYNC", "Lead", { channel: source, leadId: lastSavedLeadId ?? "unsaved-lead", demoMode: Boolean(data.demoMode) });
       void refreshGoogleIntegration();
+      void loadMemoryTimeline();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Google Sheet sync failed.");
     } finally {
@@ -1292,6 +1335,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       setLatestGoogleResult(`Calendar: ${data.log?.status ?? "BOOKED"} (${data.log?.title ?? "Demo appointment"})`);
       addLog("GOOGLE_CALENDAR_BOOKING", "Appointment", { channel: source, leadId: lastSavedLeadId ?? "unsaved-lead", demoMode: Boolean(data.demoMode) });
       void refreshGoogleIntegration();
+      void loadMemoryTimeline();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Calendar booking failed.");
     } finally {
@@ -1341,6 +1385,7 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
       setAppointmentSaved(true);
       addLog("APPOINTMENT_DRAFT_CREATED", "Appointment", { appointmentId: data.appointment?.id ?? "appointment", source: "AI Agent" });
       setToast("Appointment saved to database.");
+      void loadMemoryTimeline();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not save appointment.");
     }
@@ -1847,9 +1892,23 @@ export default function AiAgentModule({ initialTab = "agents" }: { initialTab?: 
             <Card className="min-w-0">
               <CardHeader><CardTitle>AI Memory</CardTitle><CardDescription>Conversation memory for customer identity, business, history, and preferences.</CardDescription></CardHeader>
               <CardContent className="space-y-3">
-                {memoryTimeline.map((item) => (
+                {memoryLoadState === "loading" ? (
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">Loading memory timeline...</div>
+                ) : null}
+                {memoryLoadState === "error" ? (
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">Memory timeline could not be loaded.</div>
+                ) : null}
+                {liveMemoryTimeline.map((item) => (
                   <div key={item.id} className="rounded-xl border border-white/10 bg-black/20 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3"><p className="font-semibold text-white">{item.title}</p><Badge variant="info">{item.time}</Badge></div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-white">{item.title}</p>
+                        {item.type ? <p className="mt-1 text-xs font-semibold uppercase text-slate-500">{item.type}</p> : null}
+                      </div>
+                      <Badge variant={item.type === "Demo Booking" ? "success" : item.type === "Lead Update" ? "warning" : "info"}>
+                        {clientTimestamps[`memory-${item.id}`] ?? item.time}
+                      </Badge>
+                    </div>
                     <p className="mt-2 text-sm leading-6 text-slate-300">{memoryEnabled ? item.detail : "Memory disabled"}</p>
                   </div>
                 ))}

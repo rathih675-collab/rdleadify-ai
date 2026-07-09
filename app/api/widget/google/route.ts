@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { Prisma } from "@/lib/generated/prisma/client";
 import {
+  GoogleApiError,
   appendLeadToGoogleSheet,
   createGoogleCalendarEvent,
   getGoogleIntegration,
@@ -33,7 +34,7 @@ function normalizeStart(value?: string) {
 }
 
 function text(value: unknown) {
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
 function buildSheetRow(lead: Record<string, unknown>, source: string) {
@@ -44,8 +45,8 @@ function buildSheetRow(lead: Record<string, unknown>, source: string) {
     text(lead.company) || text(lead.business),
     text(lead.requirement),
     text(lead.budget),
-    text(lead.score) || text(lead.leadScore),
     source,
+    text(lead.score) || text(lead.leadScore),
     text(lead.summary) || text(lead.aiSummary),
     new Date().toISOString(),
   ];
@@ -174,16 +175,36 @@ export async function POST(request: Request) {
       if (missingSheetsEnv().length) {
         return NextResponse.json({ ok: false, error: "Missing spreadsheet ID." }, { status: 400, headers: corsHeaders(origin) });
       }
-      const googleResponse = await appendLeadToGoogleSheet(workspace.id, buildSheetRow(body.lead ?? {}, "Website Widget"));
-      response = {
-        mode: "REAL",
-        spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-        google: googleResponse,
-        message: "Sync successful",
-      };
-      status = "SYNC_SUCCESS";
-      mode = "REAL";
-      message = "Sync successful";
+      try {
+        const googleResponse = await appendLeadToGoogleSheet(workspace.id, buildSheetRow(body.lead ?? {}, "Website Widget"));
+        response = {
+          mode: "REAL",
+          spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+          google: googleResponse,
+          message: "Sync successful",
+        };
+        status = "SYNC_SUCCESS";
+        mode = "REAL";
+        message = "Sync successful";
+      } catch (error) {
+        const details = error instanceof GoogleApiError
+          ? {
+              diagnostics: error.diagnostics,
+              googleApiErrorCode: error.code,
+              googleApiErrorMessage: error.message,
+              googleApiResponseBody: error.responseBody,
+            }
+          : undefined;
+        response = {
+          mode: "REAL",
+          spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+          error: error instanceof Error ? error.message : "Google Sheet sync failed.",
+          details,
+        };
+        status = "SYNC_FAILED";
+        mode = "REAL";
+        message = error instanceof Error ? error.message : "Google Sheet sync failed.";
+      }
     } else {
       response = {
         mode: "DEMO",
@@ -219,6 +240,14 @@ export async function POST(request: Request) {
           metadata: toJsonValue({ source: "Website Widget", conversationId: body.conversationId, mode }),
         },
       });
+
+    if (status === "SYNC_FAILED") {
+      const responseDetails = response.details ?? response;
+      return NextResponse.json(
+        { ok: false, mode, error: message, details: responseDetails, log },
+        { status: 502, headers: corsHeaders(origin) },
+      );
+    }
 
     return NextResponse.json({ ok: true, mode, message, log }, { headers: corsHeaders(origin) });
   } catch (error) {

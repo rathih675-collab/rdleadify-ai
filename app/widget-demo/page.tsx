@@ -23,7 +23,7 @@ export default async function WidgetDemoPage() {
   const workspaceId = workspace?.id;
   const workspaceKey = workspace?.slug ?? "default";
   const embedCode = `<script src="https://app.rdleadify.ai/widget.js" data-workspace="${workspaceKey}"></script>`;
-  const [conversations, leads] = workspaceId
+  const [conversations, leads, sheetSyncs] = workspaceId
     ? await Promise.all([
         prisma.inboxConversation.findMany({
           where: { workspaceId, channel: InboxChannel.WEBSITE_CHAT },
@@ -60,8 +60,19 @@ export default async function WidgetDemoPage() {
             tags: { select: { name: true } },
           },
         }),
+        prisma.googleSheetSyncLog.findMany({
+          where: { workspaceId },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+          select: {
+            id: true,
+            status: true,
+            createdAt: true,
+            response: true,
+          },
+        }),
       ])
-    : [[], []];
+    : [[], [], []];
 
   return (
     <div className="flex min-h-screen overflow-x-hidden bg-[#07111f] text-white">
@@ -155,7 +166,7 @@ export default async function WidgetDemoPage() {
             </div>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 xl:grid-cols-3">
             <Card>
               <CardHeader>
                 <div>
@@ -204,6 +215,28 @@ export default async function WidgetDemoPage() {
                   </div>
                 )) : (
                   <EmptyState text="No widget leads yet. Save a qualified conversation from the widget." />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Latest Sheet Syncs</CardTitle>
+                  <CardDescription>Google Sheet row append status for saved widget leads.</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {sheetSyncs.length ? sheetSyncs.map((sync) => (
+                  <div key={sync.id} className="rounded-xl border border-white/10 bg-black/20 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="truncate font-semibold text-white">{sync.id}</p>
+                      <Badge variant={sync.status.includes("SUCCESS") ? "success" : "warning"}>{sync.status}</Badge>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">{sync.createdAt.toISOString()}</p>
+                  </div>
+                )) : (
+                  <EmptyState text="No Google Sheet syncs yet. Save a lead, then click Send to Google Sheet." />
                 )}
               </CardContent>
             </Card>

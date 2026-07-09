@@ -17,9 +17,9 @@ export type LanguageConfig = {
 export const AUTO_LANGUAGE_ID = "auto";
 
 export const supportedLanguages: LanguageConfig[] = [
-  { id: "en", name: "English", nativeName: "English", speechLocale: "en-US", countries: ["United States", "United Kingdom", "Australia", "Canada"], greeting: "Hello", askName: "Step 1: What is your name?", askBusiness: "Step 2: What type of business do you run?", askRequirement: "Step 3: What do you need help with?", askBudget: "Step 4: What budget range should we plan around?", askDemoTime: "Step 5: What is your preferred demo time?", completion: "Perfect, the lead profile is complete." },
+  { id: "en", name: "English", nativeName: "English", speechLocale: "en-US", countries: ["United States", "United Kingdom", "Australia", "Canada"], greeting: "Hello", askName: "May I know your name?", askBusiness: "What kind of business do you run?", askRequirement: "What are you trying to solve right now?", askBudget: "What budget range should we plan around?", askDemoTime: "What demo time works best for you?", completion: "Perfect, the lead profile is complete." },
   { id: "hi", name: "Hindi", nativeName: "हिन्दी", speechLocale: "hi-IN", countries: ["India"], greeting: "नमस्ते", askName: "स्टेप 1: आपका नाम क्या है?", askBusiness: "स्टेप 2: आपका बिज़नेस किस प्रकार का है?", askRequirement: "स्टेप 3: आपको किस चीज़ में मदद चाहिए?", askBudget: "स्टेप 4: आपका बजट कितना है?", askDemoTime: "स्टेप 5: डेमो के लिए आपका पसंदीदा समय क्या है?", completion: "बहुत अच्छा, लीड प्रोफाइल पूरी हो गई है।" },
-  { id: "hinglish", name: "Hinglish", nativeName: "Hinglish", speechLocale: "hi-IN", countries: ["India"], greeting: "Namaste", askName: "Step 1: Aapka naam kya hai?", askBusiness: "Step 2: Aapka business type kya hai?", askRequirement: "Step 3: Aapko kis cheez mein help chahiye?", askBudget: "Step 4: Aapka budget range kya hai?", askDemoTime: "Step 5: Demo ke liye preferred time kya rahega?", completion: "Perfect, lead profile complete ho gayi hai." },
+  { id: "hinglish", name: "Hinglish", nativeName: "Hinglish", speechLocale: "hi-IN", countries: ["India"], greeting: "Namaste", askName: "Aapka naam kya hai?", askBusiness: "Aap kis type ka business run karte ho?", askRequirement: "Abhi aapko kis cheez mein help chahiye?", askBudget: "Budget range kya plan kar rahe ho?", askDemoTime: "Demo ke liye kaunsa time best rahega?", completion: "Perfect, lead profile complete ho gayi hai." },
   { id: "ur", name: "Urdu", nativeName: "اردو", speechLocale: "ur-PK", direction: "rtl", countries: ["Pakistan", "India"], greeting: "السلام علیکم", askName: "مرحلہ 1: آپ کا نام کیا ہے؟", askBusiness: "مرحلہ 2: آپ کا کاروبار کس قسم کا ہے؟", askRequirement: "مرحلہ 3: آپ کو کس چیز میں مدد چاہیے؟", askBudget: "مرحلہ 4: آپ کا بجٹ کیا ہے؟", askDemoTime: "مرحلہ 5: ڈیمو کے لیے پسندیدہ وقت کیا ہے؟", completion: "بہت اچھا، لیڈ پروفائل مکمل ہو گئی ہے۔" },
   { id: "ar", name: "Arabic", nativeName: "العربية", speechLocale: "ar-SA", direction: "rtl", countries: ["Saudi Arabia", "United Arab Emirates", "Egypt"], greeting: "مرحبا", askName: "الخطوة 1: ما اسمك؟", askBusiness: "الخطوة 2: ما نوع عملك؟", askRequirement: "الخطوة 3: ما الذي تحتاج المساعدة فيه؟", askBudget: "الخطوة 4: ما الميزانية المتوقعة؟", askDemoTime: "الخطوة 5: ما وقت العرض المناسب لك؟", completion: "رائع، تم اكتمال ملف العميل المحتمل." },
   { id: "fr", name: "French", nativeName: "Français", speechLocale: "fr-FR", countries: ["France", "Canada"], greeting: "Bonjour", askName: "Étape 1 : Quel est votre nom ?", askBusiness: "Étape 2 : Quel type d'entreprise dirigez-vous ?", askRequirement: "Étape 3 : De quoi avez-vous besoin ?", askBudget: "Étape 4 : Quel budget devons-nous prévoir ?", askDemoTime: "Étape 5 : Quel créneau préférez-vous pour une démo ?", completion: "Parfait, le profil du prospect est complet." },
@@ -103,6 +103,36 @@ export function detectLanguage(text: string, override = AUTO_LANGUAGE_ID) {
 
 export function questionForField(field: "name" | "business" | "requirement" | "budget" | "demoTime", languageId?: string) {
   const language = getLanguageById(languageId);
+  if (language.id === "hi") {
+    const questions = {
+      name: "Aapka naam kya hai?",
+      business: "Aap kis type ka business run karte hain?",
+      requirement: "Abhi aapko kis cheez mein help chahiye?",
+      budget: "Iske liye budget range kya hai?",
+      demoTime: "Demo ke liye kaunsa time convenient rahega?",
+    };
+    return questions[field];
+  }
+  if (language.id === "hinglish") {
+    const questions = {
+      name: "Aapka naam kya hai?",
+      business: "Aap kis type ka business run karte ho?",
+      requirement: "Abhi aapko kis cheez mein help chahiye?",
+      budget: "Budget range kya plan kar rahe ho?",
+      demoTime: "Demo ke liye kaunsa time best rahega?",
+    };
+    return questions[field];
+  }
+  if (language.id === "en") {
+    const questions = {
+      name: "May I know your name?",
+      business: "What kind of business do you run?",
+      requirement: "What are you trying to solve right now?",
+      budget: "What budget range should we plan around?",
+      demoTime: "What demo time works best for you?",
+    };
+    return questions[field];
+  }
   const map = {
     name: language.askName,
     business: language.askBusiness,

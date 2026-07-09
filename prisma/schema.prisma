@@ -177,6 +177,13 @@ model Workspace {
   emailVerificationTokens EmailVerificationToken[]
   sessions AuthSession[]
   refreshTokens RefreshToken[]
+  businessMemory BusinessMemory?
+  knowledgeDocuments KnowledgeDocument[]
+  visitorMemories VisitorMemory[]
+  conversations Conversation[]
+  conversationMemories ConversationMemory[]
+  aiPrompts AiPrompt[]
+  leadMemories LeadMemory[]
 }
 
 model User {
@@ -382,6 +389,7 @@ model Lead {
   inboxConversations InboxConversation[]
   googleSheetSyncLogs GoogleSheetSyncLog[]
   calendarBookingLogs CalendarBookingLog[]
+  leadMemory LeadMemory?
 
   @@index([workspaceId])
   @@index([assignedUserId])
@@ -794,6 +802,210 @@ model AIConversationLog {
   @@index([createdAt])
   @@index([workspaceId, channel, createdAt])
   @@index([workspaceId, status, createdAt])
+}
+
+model BusinessMemory {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String @unique
+  businessName String?
+  industry String?
+  description String?
+  products String?
+  services String?
+  pricing String?
+  faqs String?
+  workingHours String?
+  address String?
+  contactDetails String?
+  website String?
+  socialLinks Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model KnowledgeDocument {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  name String
+  type String
+  sourceUrl String?
+  mimeType String?
+  size Int?
+  status String @default("PROCESSED")
+  extractedText String
+  summary String?
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model VisitorMemory {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  visitorKey String
+  name String?
+  phone String?
+  email String?
+  business String?
+  preferredLanguage String?
+  previousRequirements String[] @default([])
+  previousSummaries String[] @default([])
+  lastAiResponse String?
+  previousConversations Int @default(0)
+  previousAppointments Int @default(0)
+  buyingIntent String?
+  lastVisit DateTime @default(now())
+  lastAiSummary String?
+  lastConversationId String?
+  leadId String?
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, visitorKey])
+  @@index([workspaceId])
+  @@index([phone])
+  @@index([email])
+  @@index([leadId])
+  @@index([business])
+  @@index([preferredLanguage])
+  @@index([lastVisit])
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  userId String?
+  leadId String?
+  title String?
+  channel String @default("CHAT")
+  status String @default("OPEN")
+  summary String?
+  leadScore Int @default(0)
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages Message[]
+  memory ConversationMemory?
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([leadId])
+  @@index([channel])
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversationId String
+  role String
+  content String
+  metadata Json?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([role])
+  @@index([createdAt])
+}
+
+model ConversationMemory {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  conversationId String? @unique
+  visitorKey String?
+  name String?
+  phone String?
+  email String?
+  business String?
+  requirement String?
+  budget String?
+  timeline String?
+  preferredLanguage String?
+  summary String?
+  lastAiResponse String?
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([visitorKey])
+  @@index([phone])
+  @@index([email])
+  @@index([business])
+  @@index([preferredLanguage])
+}
+
+model AiPrompt {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  name String
+  purpose String @default("CHAT")
+  systemPrompt String
+  isActive Boolean @default(true)
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([purpose])
+  @@index([isActive])
+}
+
+model LeadMemory {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaceId String
+  leadId String @unique
+  summary String?
+  requirement String?
+  budget String?
+  timeline String?
+  buyingIntent String?
+  preferredLanguage String?
+  lastConversationId String?
+  metadata Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([buyingIntent])
+  @@index([preferredLanguage])
+  @@index([lastConversationId])
 }
 
 model AutomationWorkflow {

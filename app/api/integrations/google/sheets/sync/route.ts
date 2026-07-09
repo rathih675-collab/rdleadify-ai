@@ -22,7 +22,7 @@ function hasLeadPayload(lead?: Record<string, unknown>) {
 }
 
 function text(value: unknown) {
-  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
 function buildSheetRow(lead: Record<string, unknown>, source?: string) {
@@ -33,8 +33,8 @@ function buildSheetRow(lead: Record<string, unknown>, source?: string) {
     text(lead.company) || text(lead.business),
     text(lead.requirement),
     text(lead.budget),
-    text(lead.score) || text(lead.leadScore),
     source || text(lead.source) || "RDLeadify AI",
+    text(lead.score) || text(lead.leadScore),
     text(lead.summary) || text(lead.aiSummary),
     new Date().toISOString(),
   ];

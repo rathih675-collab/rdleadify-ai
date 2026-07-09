@@ -1,5 +1,5 @@
-import AiAgentModule from "@/components/ai-agent/AiAgentModule";
+import AiAgentMvpModule from "@/components/mvp/AiAgentMvpModule";
 
 export default function AiAgentPage() {
-  return <AiAgentModule />;
+  return <AiAgentMvpModule />;
 }

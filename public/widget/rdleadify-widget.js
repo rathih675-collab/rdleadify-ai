@@ -34,6 +34,7 @@
   var leadInfo = state.leadInfo || {};
   var latestLead = state.latestLead || null;
   var latestAnalysis = state.latestAnalysis || null;
+  var latestSheetSync = state.latestSheetSync || null;
 
   function loadState() {
     try {
@@ -52,6 +53,7 @@
         leadInfo: leadInfo,
         latestAnalysis: latestAnalysis,
         latestLead: latestLead,
+        latestSheetSync: latestSheetSync,
         unread: unread,
         size: size
       }));
@@ -93,6 +95,7 @@
     .rdl-msg-assistant .rdl-bubble-msg { background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.10); color: #e2e8f0; }
     .rdl-light .rdl-msg-assistant .rdl-bubble-msg { background: #ffffff; border-color: rgba(15,23,42,.10); color: #172033; box-shadow: 0 10px 30px rgba(15,23,42,.06); }
     .rdl-msg-user .rdl-bubble-msg { background: var(--rdl-primary); color: #052014; font-weight: 650; }
+    .rdl-seen { margin-top: 4px; font-size: 10px; font-weight: 800; opacity: .68; text-align: right; }
     .rdl-bubble-msg p { margin: 0 0 8px; }
     .rdl-bubble-msg p:last-child { margin-bottom: 0; }
     .rdl-bubble-msg pre { margin: 8px 0 0; padding: 10px; overflow: auto; border-radius: 10px; background: rgba(0,0,0,.28); font-family: "Courier New", monospace; font-size: 12px; }
@@ -144,10 +147,10 @@
         <button class="rdl-close" type="button" title="Close">×</button>
       </header>
       <main class="rdl-messages" aria-live="polite"></main>
-      <div class="rdl-typing"><span></span><span></span><span></span><strong>AI is typing</strong></div>
+      <div class="rdl-typing"><span></span><span></span><span></span><strong>AI is thinking</strong></div>
       <div class="rdl-actions"></div>
       <form class="rdl-composer">
-        <div class="rdl-attach"><span>Attachments ready</span><span>${escapeHtml(config.businessHours)}</span></div>
+        <div class="rdl-attach"><span class="rdl-capture-status">Lead not captured yet</span><span>${escapeHtml(config.businessHours)}</span></div>
         <div class="rdl-input-row">
           <textarea class="rdl-input" rows="1" placeholder="Type your message..."></textarea>
           <button class="rdl-send" type="submit" title="Send message">
@@ -170,6 +173,7 @@
   var messagesEl = root.querySelector(".rdl-messages");
   var typingEl = root.querySelector(".rdl-typing");
   var actionsEl = root.querySelector(".rdl-actions");
+  var captureStatusEl = root.querySelector(".rdl-capture-status");
   var form = root.querySelector(".rdl-composer");
   var input = root.querySelector(".rdl-input");
   var resizeHandle = root.querySelector(".rdl-resize");
@@ -243,13 +247,21 @@
     actionsEl.querySelectorAll("[data-action]").forEach(function (button) {
       button.addEventListener("click", function () { runAction(button.dataset.action, button.textContent); });
     });
+    captureStatusEl.textContent = captureStatusText();
     typingEl.style.display = isSending ? "flex" : "none";
     messagesEl.scrollTop = messagesEl.scrollHeight;
     saveState();
   }
 
   function renderMessage(message) {
-    return '<div class="rdl-msg rdl-msg-' + message.role + '"><div class="rdl-bubble-msg">' + markdown(message.content) + "</div></div>";
+    return '<div class="rdl-msg rdl-msg-' + message.role + '"><div class="rdl-bubble-msg">' + markdown(message.content) + (message.role === "user" ? '<div class="rdl-seen">Seen</div>' : '') + "</div></div>";
+  }
+
+  function captureStatusText() {
+    if (latestLead && latestSheetSync && latestSheetSync.log) return "Lead captured + Sheet synced";
+    if (latestLead) return "Lead captured in CRM";
+    if (latestAnalysis && latestAnalysis.scoreLabel) return "Lead score: " + latestAnalysis.scoreLabel;
+    return "Lead not captured yet";
   }
 
   function renderActions() {
@@ -302,6 +314,7 @@
       leadInfo = data.analysis && data.analysis.leadInfo ? data.analysis.leadInfo : leadInfo;
       latestAnalysis = data.analysis || latestAnalysis;
       latestLead = data.lead || latestLead;
+      latestSheetSync = data.sheetSync || latestSheetSync;
       await streamAssistant(data.reply || "Thanks, I captured that.");
     } catch {
       await streamAssistant("Widget error: inbox sync failed. Please try again or share your phone so our team can follow up.");
@@ -335,17 +348,24 @@
       return;
     }
     var endpoint = action === "save" ? "/api/widget/lead" : action === "voice" ? "/api/widget/voice" : "/api/widget/google";
+    var leadPayload = Object.assign({}, leadInfo, {
+      source: "Website Widget",
+      score: latestAnalysis && latestAnalysis.score ? latestAnalysis.score : latestLead && latestLead.score,
+      leadScore: latestAnalysis && latestAnalysis.score ? latestAnalysis.score : latestLead && latestLead.score,
+      summary: latestAnalysis && latestAnalysis.summary ? latestAnalysis.summary : "",
+      aiSummary: latestAnalysis && latestAnalysis.summary ? latestAnalysis.summary : ""
+    });
     var payload = {
       workspaceKey: workspaceKey,
       visitorId: state.visitorId,
       conversationId: state.conversationId,
       leadId: latestLead && latestLead.id,
-      lead: leadInfo,
+      lead: leadPayload,
       messages: messages,
       action: action === "calendar" ? "calendar" : "sheet",
       title: "RDLeadify AI Website Demo",
-      attendeeEmail: leadInfo.email,
-      attendeePhone: leadInfo.phone
+      attendeeEmail: leadPayload.email,
+      attendeePhone: leadPayload.phone
     };
     isSending = true;
     render();

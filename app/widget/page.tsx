@@ -1,5 +1,5 @@
-import WidgetInstallModule from "@/components/widget/WidgetInstallModule";
+import WebsiteWidgetMvpModule from "@/components/mvp/WebsiteWidgetMvpModule";
 
 export default function WidgetPage() {
-  return <WidgetInstallModule />;
+  return <WebsiteWidgetMvpModule />;
 }

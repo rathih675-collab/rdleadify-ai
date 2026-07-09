@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
+import { loadAiContext, saveVisitorMemory } from "@/lib/server/ai-memory";
 import {
-  analyzeWidgetLead,
   corsHeaders,
-  createWidgetReply,
   getDefaultWidgetSettings,
   persistWidgetConversation,
   resolveWidgetWorkspace,
+  runWidgetConversationTurn,
   type WidgetLeadInfo,
   type WidgetMessage,
 } from "@/lib/server/widget";
@@ -51,16 +51,20 @@ export async function POST(request: Request) {
     const visitorId = String(body.visitorId || crypto.randomUUID()).slice(0, 80);
     const conversationId = String(body.conversationId || `web_${visitorId}`).slice(0, 120);
     const settings = getDefaultWidgetSettings(body.settings);
-    const analysis = analyzeWidgetLead(messages, body.leadInfo, body.language || settings.language);
-    let reply: string;
-
-    try {
-      reply = await createWidgetReply(messages, analysis, settings);
-    } catch {
-      reply = analysis.missingFields.length
-        ? `Thanks. ${analysis.nextAction}`
-        : `Perfect, I have captured your details. ${analysis.summary}`;
-    }
+    const aiContext = await loadAiContext({
+      workspaceId: workspace.id,
+      conversationId,
+      messages,
+      leadInfo: body.leadInfo,
+    });
+    const turn = await runWidgetConversationTurn({
+      messages,
+      leadInfo: body.leadInfo,
+      language: body.language || settings.language,
+      settings,
+      aiContext,
+    });
+    const { analysis, reply } = turn;
 
     const persistence = await persistWidgetConversation({
       workspaceId: workspace.id,
@@ -73,17 +77,43 @@ export async function POST(request: Request) {
       referrer: body.referrer,
       forceLead: body.saveLead,
     });
+    await saveVisitorMemory({
+      workspaceId: workspace.id,
+      conversationId,
+      analysis,
+      leadId: persistence.lead?.id,
+      lastAiResponse: reply,
+    });
+    const leadExtracted = Boolean(
+      analysis.leadInfo.name &&
+        (analysis.leadInfo.phone || analysis.leadInfo.email) &&
+        analysis.leadInfo.business &&
+        analysis.leadInfo.requirement &&
+        analysis.leadInfo.budget &&
+        analysis.leadInfo.timeline,
+    );
 
     return NextResponse.json(
       {
         ok: true,
         reply,
+        language: analysis.detectedLanguage,
+        leadScore: analysis.scoreLabel,
+        numericLeadScore: analysis.score,
+        leadExtracted,
+        summary: analysis.summary,
         analysis,
-        provider: process.env.OPENAI_API_KEY ? "openai" : "local",
+        provider: turn.provider,
         conversationId,
         visitorId,
         lead: persistence.lead,
         inboxConversationId: persistence.inboxConversationId,
+        sheetSync: persistence.sheetSync,
+        memory: {
+          businessMemoryLoaded: Boolean(aiContext.businessMemory),
+          knowledgeDocumentsUsed: aiContext.knowledge.length,
+          visitorMemoryLoaded: Boolean(aiContext.visitorMemory),
+        },
         quickReplies: analysis.missingFields.length
           ? ["Share phone", "Share email", "Book demo"]
           : ["Send to Google Sheet", "Book Calendar Appointment", "Talk to AI Voice Agent"],
