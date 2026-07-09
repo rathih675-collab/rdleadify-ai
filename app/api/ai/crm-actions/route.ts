@@ -1,4 +1,4 @@
-import { TaskPriority } from "@/lib/generated/prisma/enums";
+import { TaskPriority } from "@prisma/client";
 import { ApiError, assertPermission, readJson, withWorkspace } from "@/lib/server/api";
 import { prisma } from "@/lib/server/prisma";
 

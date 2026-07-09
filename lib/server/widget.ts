@@ -1,11 +1,11 @@
-import { Prisma } from "@/lib/generated/prisma/client";
 import {
   InboxChannel,
   InboxMessageType,
   InboxSender,
   LeadStatus,
+  Prisma,
   TaskPriority,
-} from "@/lib/generated/prisma/enums";
+} from "@prisma/client";
 import { detectLanguage } from "@/lib/ai/languages";
 import { buildFinalAiSystemPrompt, type AiContextBundle } from "@/lib/server/ai-memory";
 import { backendLog } from "@/lib/server/dev-log";

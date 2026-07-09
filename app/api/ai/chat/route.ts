@@ -1,8 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { Prisma } from "@/lib/generated/prisma/client";
-import { AIConversationChannel, LeadStatus } from "@/lib/generated/prisma/enums";
+import { AIConversationChannel, LeadStatus, Prisma } from "@prisma/client";
 import { AUTO_LANGUAGE_ID, detectLanguage } from "@/lib/ai/languages";
 import { AUTH_COOKIE_NAME } from "@/lib/server/auth-constants";
 import { jsonError, readJson } from "@/lib/server/api";

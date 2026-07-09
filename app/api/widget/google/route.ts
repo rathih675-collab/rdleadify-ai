@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { Prisma } from "@/lib/generated/prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   GoogleApiError,
   appendLeadToGoogleSheet,

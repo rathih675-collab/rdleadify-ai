@@ -1,4 +1,4 @@
-import { LeadStatus } from "@/lib/generated/prisma/enums";
+import { LeadStatus } from "@prisma/client";
 import { ApiError, assertPermission, withWorkspace } from "@/lib/server/api";
 import { prisma } from "@/lib/server/prisma";
 

@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 
-import { Prisma } from "@/lib/generated/prisma/client";
-import { IntegrationStatus } from "@/lib/generated/prisma/enums";
+import { IntegrationStatus, Prisma } from "@prisma/client";
 import { backendLog } from "@/lib/server/dev-log";
 import { prisma } from "@/lib/server/prisma";
 

@@ -6,7 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { InboxChannel } from "@/lib/generated/prisma/enums";
+import { InboxChannel } from "@prisma/client";
 import { prisma } from "@/lib/server/prisma";
 
 async function resolveWorkspace() {

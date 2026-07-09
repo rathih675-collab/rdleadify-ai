@@ -1,4 +1,4 @@
-import { CampaignStatus } from "@/lib/generated/prisma/enums";
+import { CampaignStatus } from "@prisma/client";
 import { ApiError, assertPermission, paginationFromUrl, readJson, withWorkspace } from "@/lib/server/api";
 import { prisma } from "@/lib/server/prisma";
 

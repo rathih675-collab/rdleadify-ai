@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 
 import MvpDashboardModule from "@/components/mvp/MvpDashboardModule";
-import { InboxChannel } from "@/lib/generated/prisma/enums";
+import { InboxChannel } from "@prisma/client";
 import { prisma } from "@/lib/server/prisma";
 
 async function resolveWorkspaceId() {

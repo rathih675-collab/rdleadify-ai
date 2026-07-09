@@ -1,4 +1,4 @@
-import { Prisma } from "@/lib/generated/prisma/client";
+import { Prisma } from "@prisma/client";
 import { ApiError, assertPermission, paginationFromUrl, readJson, withWorkspace } from "@/lib/server/api";
 import { backendLog } from "@/lib/server/dev-log";
 import { createGoogleCalendarEvent, getGoogleIntegration, missingCalendarEnv } from "@/lib/server/google";

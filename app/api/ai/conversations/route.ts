@@ -1,4 +1,4 @@
-import { AIConversationChannel } from "@/lib/generated/prisma/enums";
+import { AIConversationChannel } from "@prisma/client";
 import { ApiError, assertPermission, paginationFromUrl, readJson, withWorkspace } from "@/lib/server/api";
 import { prisma } from "@/lib/server/prisma";
 

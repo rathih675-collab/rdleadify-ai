@@ -1,4 +1,4 @@
-import { LeadStatus } from "@/lib/generated/prisma/enums";
+import { LeadStatus } from "@prisma/client";
 import { ApiError, assertPermission, readJson, withWorkspace } from "@/lib/server/api";
 import { backendLog } from "@/lib/server/dev-log";
 import { GoogleApiError, appendLeadToGoogleSheet, getGoogleIntegration, missingSheetsEnv } from "@/lib/server/google";
