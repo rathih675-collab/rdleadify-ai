@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 
 import { sendVerificationOtpEmail, shouldExposeDevOtp } from "@/lib/email";
 import { jsonError, readJson } from "@/lib/server/api";
-import { enforceCaptcha } from "@/lib/server/captcha";
 import { authLog } from "@/lib/server/dev-log";
 import { createOtp, hashOtp } from "@/lib/server/otp";
 import { hashPassword } from "@/lib/server/password";
@@ -24,7 +23,6 @@ type RegisterBody = {
   email?: string;
   password?: string;
   workspaceName?: string;
-  captchaToken?: string;
   acceptedTerms?: boolean;
   acceptedPrivacy?: boolean;
 };
@@ -44,9 +42,6 @@ export async function POST(request: NextRequest) {
     authLog("register validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many registration attempts. Try again in ${limit.retryAfter} seconds.`, 429);
   }
-
-  const captchaError = await enforceCaptcha(body.captchaToken, ip);
-  if (captchaError) return captchaError;
 
   const email = normalizeEmail(body.email ?? "");
   const name = body.name?.trim() ?? "";

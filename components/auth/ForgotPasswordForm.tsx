@@ -5,7 +5,6 @@ import { Loader2, MailCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field } from "@/components/auth/AuthFields";
-import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
 import { canShowDevOtp } from "@/lib/auth-client";
 
@@ -15,7 +14,6 @@ export default function ForgotPasswordForm() {
   const [devOtp, setDevOtp] = useState("");
   const [submittedEmail, setSubmittedEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -29,7 +27,7 @@ export default function ForgotPasswordForm() {
     const response = await fetch("/api/auth/forgot-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, captchaToken }),
+      body: JSON.stringify({ email }),
     });
 
     const data = await response.json();
@@ -78,7 +76,6 @@ export default function ForgotPasswordForm() {
       ) : null}
 
       <Field label="Email" name="email" type="email" autoComplete="email" required />
-      <Turnstile onVerify={setCaptchaToken} />
 
       <Button type="submit" className="w-full" disabled={loading}>
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}

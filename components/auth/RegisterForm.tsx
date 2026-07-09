@@ -6,7 +6,6 @@ import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
 import PasswordStrength, { passwordScore } from "@/components/auth/PasswordStrength";
-import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
 import { canShowDevOtp } from "@/lib/auth-client";
 
@@ -19,7 +18,6 @@ export default function RegisterForm() {
   const [password, setPassword] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,12 +34,6 @@ export default function RegisterForm() {
 
     if (!acceptedTerms || !acceptedPrivacy) {
       setError("Please accept the Terms of Service and Privacy Policy.");
-      setLoading(false);
-      return;
-    }
-
-    if (!captchaToken) {
-      setError("Complete the captcha challenge to continue.");
       setLoading(false);
       return;
     }
@@ -68,7 +60,6 @@ export default function RegisterForm() {
         password: currentPassword,
         acceptedTerms,
         acceptedPrivacy,
-        captchaToken,
       }),
     });
 
@@ -166,8 +157,6 @@ export default function RegisterForm() {
           </span>
         </label>
       </div>
-      <Turnstile onVerify={setCaptchaToken} />
-
       <Button
         type="submit"
         className="w-full"

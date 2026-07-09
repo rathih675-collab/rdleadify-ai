@@ -2,7 +2,6 @@ import type { NextRequest } from "next/server";
 
 import { jsonError, readJson } from "@/lib/server/api";
 import { isValidEmail, normalizeEmail, validatePassword } from "@/lib/server/auth-validation";
-import { enforceCaptcha } from "@/lib/server/captcha";
 import { authLog } from "@/lib/server/dev-log";
 import { hashOtp, validateOtpShape } from "@/lib/server/otp";
 import { hashPassword } from "@/lib/server/password";
@@ -14,7 +13,6 @@ type ResetPasswordBody = {
   email?: string;
   otp?: string;
   password?: string;
-  captchaToken?: string;
 };
 
 export async function POST(request: NextRequest) {
@@ -31,9 +29,6 @@ export async function POST(request: NextRequest) {
     authLog("reset password validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many reset attempts. Try again in ${limit.retryAfter} seconds.`, 429);
   }
-
-  const captchaError = await enforceCaptcha(body.captchaToken, ip);
-  if (captchaError) return captchaError;
 
   const email = normalizeEmail(body.email ?? "");
   const otp = body.otp?.trim() ?? "";

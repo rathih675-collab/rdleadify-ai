@@ -5,7 +5,6 @@ import { createOpaqueToken, hashOpaqueToken } from "@/lib/server/tokens";
 import { AUTH_COOKIE_NAME, NORMAL_SESSION_SECONDS, REFRESH_COOKIE_NAME, REMEMBER_ME_SESSION_SECONDS } from "@/lib/server/auth-constants";
 import { isValidEmail, normalizeEmail } from "@/lib/server/auth-validation";
 import { jsonError, readJson } from "@/lib/server/api";
-import { enforceCaptcha } from "@/lib/server/captcha";
 import { authLog } from "@/lib/server/dev-log";
 import { verifyPassword } from "@/lib/server/password";
 import { prisma } from "@/lib/server/prisma";
@@ -17,7 +16,6 @@ type LoginBody = {
   email?: string;
   password?: string;
   rememberMe?: boolean;
-  captchaToken?: string;
 };
 
 export async function POST(request: NextRequest) {
@@ -35,9 +33,6 @@ export async function POST(request: NextRequest) {
     authLog("login validation failed", { reason: "rate_limit", ip });
     return jsonError(`Too many login attempts. Try again in ${limit.retryAfter} seconds.`, 429);
   }
-
-  const captchaError = await enforceCaptcha(body.captchaToken, ip);
-  if (captchaError) return captchaError;
 
   const email = normalizeEmail(body.email ?? "");
   const password = body.password ?? "";

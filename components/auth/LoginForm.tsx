@@ -5,14 +5,12 @@ import { Loader2, LogIn } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
-import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
 
 export default function LoginForm({ successMessage = "" }: { successMessage?: string }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -27,7 +25,6 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         email: form.get("email"),
         password: form.get("password"),
         rememberMe,
-        captchaToken,
       }),
     });
 
@@ -82,8 +79,6 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           Forgot password?
         </Link>
       </div>
-      <Turnstile onVerify={setCaptchaToken} />
-
       <Button type="submit" className="w-full" disabled={loading}>
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
         {loading ? "Signing in..." : "Login"}

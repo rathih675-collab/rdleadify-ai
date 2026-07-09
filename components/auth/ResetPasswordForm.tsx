@@ -6,7 +6,6 @@ import { FormEvent, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
 import PasswordStrength, { passwordScore } from "@/components/auth/PasswordStrength";
-import Turnstile from "@/components/auth/Turnstile";
 import { Button } from "@/components/ui/button";
 
 export default function ResetPasswordForm({ initialEmail = "" }: { initialEmail?: string }) {
@@ -15,7 +14,6 @@ export default function ResetPasswordForm({ initialEmail = "" }: { initialEmail?
   const [email, setEmail] = useState(initialEmail);
   const [otp, setOtp] = useState("");
   const [password, setPassword] = useState("");
-  const [captchaToken, setCaptchaToken] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -43,7 +41,7 @@ export default function ResetPasswordForm({ initialEmail = "" }: { initialEmail?
     const response = await fetch("/api/auth/reset-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, otp, password, captchaToken }),
+      body: JSON.stringify({ email, otp, password }),
     });
 
     const data = await response.json();
@@ -111,8 +109,6 @@ export default function ResetPasswordForm({ initialEmail = "" }: { initialEmail?
         minLength={8}
         required
       />
-      <Turnstile onVerify={setCaptchaToken} />
-
       <Button type="submit" className="w-full" disabled={loading}>
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
         {loading ? "Resetting..." : "Reset password"}
