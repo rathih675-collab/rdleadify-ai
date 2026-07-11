@@ -1,5 +1,5 @@
-import PipelineModule from "@/components/pipeline/PipelineModule";
+import LeadsModule from "@/components/leads/LeadsModule";
 
 export default function PipelinePage() {
-  return <PipelineModule />;
+  return <LeadsModule initialView="kanban" />;
 }
