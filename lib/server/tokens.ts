@@ -12,10 +12,10 @@ const issuer = "rdleadify-ai";
 const audience = "rdleadify-ai-app";
 
 function getJwtSecret() {
-  const secret = process.env.JWT_SECRET ?? process.env.AUTH_SECRET;
+  const secret = process.env.NEXTAUTH_SECRET ?? process.env.JWT_SECRET ?? process.env.AUTH_SECRET;
 
   if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("JWT_SECRET or AUTH_SECRET is required in production.");
+    throw new Error("NEXTAUTH_SECRET, JWT_SECRET, or AUTH_SECRET is required in production.");
   }
 
   return new TextEncoder().encode(secret ?? "rdleadify-ai-local-development-secret");
