@@ -15,6 +15,7 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
 
   async function readResponse(response: Response) {
     const text = await response.text();
+    console.info("[login] response body", { body: text || "<empty>" });
     if (!text.trim()) return { success: false, error: "The login service returned an empty response. Please try again." };
     try {
       return JSON.parse(text) as { success?: boolean; error?: string; redirect?: string };
@@ -90,28 +91,52 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submittingRef.current) return;
+    console.info("[login] submit started");
     submittingRef.current = true;
     setError("");
     setLoading(true);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const requestController = new AbortController();
+    const captchaController = new AbortController();
+    let requestTimedOut = false;
+    let captchaTimedOut = false;
+    const abortCaptcha = () => captchaController.abort();
+    requestController.signal.addEventListener("abort", abortCaptcha, { once: true });
+    const requestTimeout = window.setTimeout(() => {
+      requestTimedOut = true;
+      requestController.abort();
+    }, 15_000);
+    const captchaTimeout = window.setTimeout(() => {
+      captchaTimedOut = true;
+      captchaController.abort();
+    }, 8_000);
     try {
       const form = new FormData(event.currentTarget);
-      const captchaToken = await getTurnstileToken(controller.signal);
-      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: controller.signal, body: JSON.stringify({ email: form.get("email"), password: form.get("password"), rememberMe, captchaToken }) });
+      const captchaToken = await getTurnstileToken(captchaController.signal);
+      window.clearTimeout(captchaTimeout);
+      console.info("[login] captcha token created");
+      console.info("[login] request sent", { endpoint: "/api/auth/login" });
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: form.get("email"), password: form.get("password"), rememberMe, captchaToken }) });
+      console.info("[login] response status", { status: response.status });
       const data = await readResponse(response);
       if (!response.ok || !data.success) { setError(data.error ?? (response.status >= 500 ? "The login service is temporarily unavailable. Please try again." : "Unable to sign in.")); return; }
       const requestedNext = new URLSearchParams(window.location.search).get("next");
       const redirect = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : data.redirect ?? "/dashboard";
+      console.info("[login] redirect started", { redirect });
       window.location.assign(redirect);
     } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") setError("Login request timed out. Please try again.");
+      console.error("[login] error caught", { errorType: cause instanceof Error ? cause.name : "UnknownError" });
+      if (captchaTimedOut) setError("Captcha could not load. Please refresh and try again.");
+      else if (requestTimedOut || (cause instanceof DOMException && cause.name === "AbortError")) setError("Login request timed out. Please try again.");
       else if (cause instanceof Error) setError(cause.message || "A network error prevented login. Please try again.");
       else setError("A network error prevented login. Please try again.");
     } finally {
-      window.clearTimeout(timeout);
+      window.clearTimeout(captchaTimeout);
+      window.clearTimeout(requestTimeout);
+      requestController.signal.removeEventListener("abort", abortCaptcha);
+      captchaController.abort();
       submittingRef.current = false;
       setLoading(false);
+      console.info("[login] loading reset");
     }
   }
 
