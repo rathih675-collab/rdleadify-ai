@@ -26,19 +26,64 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   async function getTurnstileToken(signal: AbortSignal) {
     const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
     if (!siteKey) {
-      if (process.env.NODE_ENV === "production") throw new Error("Security verification is not configured. Please contact support.");
-      return "";
+      throw new Error("Security verification is not configured. Please contact support.");
     }
     await loadTurnstileScript(signal);
-    if (!window.turnstile) throw new Error("Security verification is unavailable. Please try again.");
     return new Promise<string>((resolve, reject) => {
-      const container = document.createElement("div"); container.hidden = true; document.body.appendChild(container);
+      const turnstile = window.turnstile;
+      if (!turnstile) {
+        reject(new Error("Captcha is still loading. Please try again."));
+        return;
+      }
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      const containerRoot = document.body;
+      if (!containerRoot) {
+        reject(new Error("Captcha could not start. Please try again."));
+        return;
+      }
+      const container = document.createElement("div");
+      container.hidden = true;
+      containerRoot.appendChild(container);
       let widgetId: string | undefined;
-      const cleanup = () => { if (widgetId && window.turnstile) window.turnstile.remove(widgetId); container.remove(); signal.removeEventListener("abort", aborted); };
-      const aborted = () => { cleanup(); reject(new DOMException("Aborted", "AbortError")); };
+      let settled = false;
+      const cleanup = () => {
+        try {
+          if (widgetId) turnstile.remove(widgetId);
+        } catch {
+          // Cleanup must never prevent the login promise from settling.
+        }
+        container.remove();
+        signal.removeEventListener("abort", aborted);
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const aborted = () => fail(new DOMException("Aborted", "AbortError"));
       signal.addEventListener("abort", aborted, { once: true });
-      widgetId = window.turnstile.render(container, { sitekey: siteKey, size: "invisible", callback: token => { cleanup(); resolve(token); }, "error-callback": () => { cleanup(); reject(new Error("Security verification failed. Please try again.")); }, "timeout-callback": () => { cleanup(); reject(new Error("Security verification timed out. Please try again.")); } });
-      window.turnstile.execute(widgetId);
+      try {
+        widgetId = turnstile.render(container, {
+          sitekey: siteKey,
+          size: "invisible",
+          callback: token => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(token);
+          },
+          "error-callback": () => fail(new Error("Security verification failed. Please try again.")),
+          "timeout-callback": () => fail(new Error("Security verification timed out. Please try again.")),
+        });
+        if (!widgetId) throw new Error("Security verification could not start. Please try again.");
+        turnstile.execute(widgetId);
+      } catch {
+        fail(new Error("Security verification could not start. Please try again."));
+      }
     });
   }
 
@@ -128,12 +173,40 @@ declare global { interface Window { turnstile?: { render: (container: HTMLElemen
 let turnstileScriptPromise: Promise<void> | null = null;
 function loadTurnstileScript(signal: AbortSignal) {
   if (window.turnstile) return Promise.resolve();
-  if (!turnstileScriptPromise) turnstileScriptPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-rdleadify-turnstile]');
-    const script = existing ?? document.createElement("script");
-    const failed = () => { turnstileScriptPromise = null; reject(new Error("Security verification could not load. Check your connection and try again.")); };
-    script.addEventListener("load", () => resolve(), { once: true }); script.addEventListener("error", failed, { once: true });
-    if (!existing) { script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"; script.async = true; script.defer = true; script.dataset.rdleadifyTurnstile = "true"; document.head.appendChild(script); }
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  if (!turnstileScriptPromise) {
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>('script[data-rdleadify-turnstile]');
+      const script = existing ?? document.createElement("script");
+      const timeout = window.setTimeout(() => {
+        failed(new Error("Captcha took too long to load. Please try again."));
+      }, 10_000);
+      const loaded = () => {
+        window.clearTimeout(timeout);
+        if (window.turnstile) resolve();
+        else failed(new Error("Captcha is still loading. Please try again."));
+      };
+      const failed = (error: Error = new Error("Security verification could not load. Check your connection and try again.")) => {
+        window.clearTimeout(timeout);
+        turnstileScriptPromise = null;
+        reject(error);
+      };
+      script.addEventListener("load", loaded, { once: true });
+      script.addEventListener("error", () => failed(), { once: true });
+      if (!existing) {
+        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+        script.async = true;
+        script.defer = true;
+        script.dataset.rdleadifyTurnstile = "true";
+        document.head.appendChild(script);
+      } else if (window.turnstile) {
+        loaded();
+      }
+    });
+  }
+  return new Promise<void>((resolve, reject) => {
+    const aborted = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", aborted, { once: true });
+    turnstileScriptPromise!.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
   });
-  return Promise.race([turnstileScriptPromise, new Promise<void>((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }))]);
 }
