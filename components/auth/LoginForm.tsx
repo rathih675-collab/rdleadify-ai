@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Script from "next/script";
 import { Loader2, LogIn } from "lucide-react";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
 import { Button } from "@/components/ui/button";
@@ -14,38 +14,52 @@ const TURNSTILE_CONFIGURATION_ERROR =
 
 export default function LoginForm({ successMessage = "" }: { successMessage?: string }) {
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
-  const [turnstileGeneration, setTurnstileGeneration] = useState(0);
-  const [turnstileScriptStatus, setTurnstileScriptStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [turnstileScriptLoaded, setTurnstileScriptLoaded] = useState(false);
+  const [turnstileReady, setTurnstileReady] = useState(false);
+  const [turnstileLoadFailed, setTurnstileLoadFailed] = useState(false);
+  const siteKeyPresent = Boolean(TURNSTILE_SITE_KEY);
   const submittingRef = useRef(false);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
+  const tokenRequestRef = useRef<{
+    promise: Promise<string>;
+    resolve: (token: string) => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  } | null>(null);
 
   useEffect(() => {
-    const siteKeyPresent = Boolean(TURNSTILE_SITE_KEY);
     console.info("[turnstile] client configuration", { siteKeyPresent });
     if (!siteKeyPresent) setError(TURNSTILE_CONFIGURATION_ERROR);
+  }, [siteKeyPresent]);
+
+  const finishTokenRequest = useCallback((token?: string, error?: Error) => {
+    const pending = tokenRequestRef.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    tokenRequestRef.current = null;
+    if (token) pending.resolve(token);
+    else pending.reject(error ?? new Error("Security verification failed. Please try again."));
   }, []);
 
   useEffect(() => {
-    if (turnstileScriptStatus !== "ready") return;
+    if (!turnstileScriptLoaded) return;
 
     const turnstile = window.turnstile;
     const container = turnstileContainerRef.current;
-    if (!turnstile || !container) return;
+    if (!turnstile || !container) {
+      setTurnstileLoadFailed(true);
+      setError("Security verification could not load. Please refresh and try again.");
+      return;
+    }
 
     let disposed = false;
     let widgetId: string | undefined;
-    const requestAnotherToken = () => {
-      if (disposed || !widgetId) return;
-      setTurnstileToken("");
-      turnstile.reset(widgetId);
-      turnstile.execute(widgetId);
-    };
-
-    setTurnstileToken("");
     try {
       widgetId = turnstile.render(container, {
         sitekey: TURNSTILE_SITE_KEY,
@@ -55,27 +69,40 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         callback: token => {
           if (disposed) return;
           setTurnstileToken(token);
-          console.info("[turnstile] token ready", { tokenPresent: Boolean(token) });
+          console.info("[login] token generated", { tokenPresent: Boolean(token) });
+          finishTokenRequest(token);
         },
-        "expired-callback": requestAnotherToken,
+        "expired-callback": () => {
+          setTurnstileToken("");
+          finishTokenRequest(undefined, new Error("Security verification expired. Please try again."));
+        },
         "error-callback": errorCode => {
           console.error("[turnstile] challenge error", { errorCode });
+          setTurnstileToken("");
           setError("Security verification failed. Please try again.");
-          requestAnotherToken();
+          finishTokenRequest(undefined, new Error("Security verification failed. Please try again."));
           return true;
         },
-        "timeout-callback": requestAnotherToken,
+        "timeout-callback": () => {
+          setTurnstileToken("");
+          finishTokenRequest(undefined, new Error("Security verification timed out. Please try again."));
+        },
       });
       turnstileWidgetIdRef.current = widgetId;
-      turnstile.execute(widgetId);
+      setTurnstileReady(true);
+      setTurnstileLoadFailed(false);
+      console.info("[login] turnstile ready");
     } catch {
       setTurnstileToken("");
-      setTurnstileScriptStatus("error");
-      setError("Security verification could not start. Please refresh and try again.");
+      setTurnstileReady(false);
+      setTurnstileLoadFailed(true);
+      setError("Security verification could not load. Please refresh and try again.");
     }
 
     return () => {
       disposed = true;
+      setTurnstileReady(false);
+      finishTokenRequest(undefined, new Error("Security verification was interrupted. Please try again."));
       if (widgetId) {
         try {
           turnstile.remove(widgetId);
@@ -85,16 +112,49 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
       }
       if (turnstileWidgetIdRef.current === widgetId) turnstileWidgetIdRef.current = null;
     };
-  }, [turnstileGeneration, turnstileScriptStatus]);
+  }, [finishTokenRequest, turnstileScriptLoaded]);
 
-  function requestFreshTurnstileToken() {
+  const generateTurnstileToken = useCallback((forceFresh = false) => {
+    if (!forceFresh && turnstileToken) return Promise.resolve(turnstileToken);
+    if (tokenRequestRef.current) return tokenRequestRef.current.promise;
+
+    const turnstile = window.turnstile;
+    const widgetId = turnstileWidgetIdRef.current;
+    if (!turnstileReady || !turnstile || !widgetId) {
+      return Promise.reject(new Error("Security verification could not load. Please refresh and try again."));
+    }
+
     setTurnstileToken("");
-    setTurnstileGeneration(current => current + 1);
-  }
+    let resolveToken!: (token: string) => void;
+    let rejectToken!: (error: Error) => void;
+    const promise = new Promise<string>((resolve, reject) => {
+      resolveToken = resolve;
+      rejectToken = reject;
+    });
+    const timeoutId = window.setTimeout(() => {
+      finishTokenRequest(undefined, new Error("Security verification timed out. Please try again."));
+    }, 8_000);
+    tokenRequestRef.current = { promise, resolve: resolveToken, reject: rejectToken, timeoutId };
+
+    try {
+      turnstile.reset(widgetId);
+      turnstile.execute(widgetId);
+    } catch {
+      finishTokenRequest(undefined, new Error("Security verification could not start. Please refresh and try again."));
+    }
+    return promise;
+  }, [finishTokenRequest, turnstileReady, turnstileToken]);
+
+  const requestFreshTurnstileToken = useCallback(() => {
+    void generateTurnstileToken(true).catch(cause => {
+      console.error("[turnstile] fresh token request failed", {
+        errorType: cause instanceof Error ? cause.name : "UnknownError",
+      });
+    });
+  }, [generateTurnstileToken]);
 
   async function readResponse(response: Response) {
     const text = await response.text();
-    console.info("[login] response body", { body: text || "<empty>" });
     if (!text.trim()) return { success: false, error: "The login service returned an empty response. Please try again." };
     try {
       return JSON.parse(text) as { success?: boolean; error?: string; redirect?: string };
@@ -105,39 +165,41 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    console.info("[login] button clicked");
     if (submittingRef.current) return;
-    if (!TURNSTILE_SITE_KEY) {
+    if (!email.trim() || !password) return;
+    if (!siteKeyPresent) {
       setError(TURNSTILE_CONFIGURATION_ERROR);
       return;
     }
-    if (turnstileScriptStatus !== "ready" || !window.turnstile) {
-      setError(turnstileScriptStatus === "error"
-        ? "Security verification could not load. Check your connection and try again."
-        : "Captcha is still loading. Please try again.");
+    if (turnstileLoadFailed) {
+      setError("Security verification could not load. Please refresh and try again.");
       return;
     }
-    if (!turnstileToken) {
-      setError("Complete security verification before logging in.");
+    if (!turnstileReady || !window.turnstile) {
+      setError("Captcha is still loading. Please try again.");
       return;
     }
-    console.info("[login] submit started");
+
     submittingRef.current = true;
     setError("");
-    setLoading(true);
-    const tokenForAttempt = turnstileToken;
-    setTurnstileToken("");
-    const requestController = new AbortController();
+    setIsSubmitting(true);
+    console.info("[login] submit started");
+    let requestController: AbortController | null = null;
+    let requestTimeout: number | null = null;
     let requestTimedOut = false;
     let loginSucceeded = false;
-    const requestTimeout = window.setTimeout(() => {
-      requestTimedOut = true;
-      requestController.abort();
-    }, 15_000);
     try {
-      const form = new FormData(event.currentTarget);
+      const tokenForAttempt = turnstileToken || await generateTurnstileToken();
+      setTurnstileToken("");
+      requestController = new AbortController();
+      requestTimeout = window.setTimeout(() => {
+        requestTimedOut = true;
+        requestController?.abort();
+      }, 15_000);
       console.info("[login] request sent", { endpoint: "/api/auth/login", tokenPresent: Boolean(tokenForAttempt) });
-      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: form.get("email"), password: form.get("password"), rememberMe, turnstileToken: tokenForAttempt }) });
-      console.info("[login] response status", { status: response.status });
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: email.trim(), password, rememberMe, turnstileToken: tokenForAttempt }) });
+      console.info("[login] response received", { status: response.status });
       const data = await readResponse(response);
       if (!response.ok || !data.success) { setError(data.error ?? (response.status >= 500 ? "The login service is temporarily unavailable. Please try again." : "Unable to sign in.")); return; }
       const requestedNext = new URLSearchParams(window.location.search).get("next");
@@ -151,13 +213,16 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
       else if (cause instanceof Error) setError(cause.message || "A network error prevented login. Please try again.");
       else setError("A network error prevented login. Please try again.");
     } finally {
-      window.clearTimeout(requestTimeout);
+      if (requestTimeout !== null) window.clearTimeout(requestTimeout);
       if (!loginSucceeded) requestFreshTurnstileToken();
       submittingRef.current = false;
-      setLoading(false);
+      setIsSubmitting(false);
       console.info("[login] loading reset");
     }
   }
+
+  const turnstileLoading = siteKeyPresent && !turnstileReady && !turnstileLoadFailed;
+  const loginDisabled = isSubmitting || !email.trim() || !password || turnstileLoading;
 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
@@ -166,17 +231,16 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           id="cloudflare-turnstile"
           src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
           strategy="afterInteractive"
-          onReady={() => setTurnstileScriptStatus("ready")}
+          onReady={() => setTurnstileScriptLoaded(true)}
           onError={() => {
-            setTurnstileScriptStatus("error");
+            setTurnstileReady(false);
+            setTurnstileLoadFailed(true);
             setTurnstileToken("");
-            setError("Security verification could not load. Check your connection and try again.");
+            setError("Security verification could not load. Please refresh and try again.");
           }}
         />
       ) : null}
-      {turnstileScriptStatus === "ready" ? (
-        <div ref={turnstileContainerRef} hidden aria-hidden="true" />
-      ) : null}
+      {siteKeyPresent ? <div ref={turnstileContainerRef} hidden aria-hidden="true" /> : null}
       <div>
         <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
           Welcome back
@@ -192,11 +256,21 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         <AuthNotice tone="success">{successMessage}</AuthNotice>
       ) : null}
 
-      <Field label="Email" name="email" type="email" autoComplete="email" required />
+      <Field
+        label="Email"
+        name="email"
+        type="email"
+        autoComplete="email"
+        value={email}
+        onChange={event => setEmail(event.target.value)}
+        required
+      />
       <PasswordField
         label="Password"
         name="password"
         autoComplete="current-password"
+        value={password}
+        onChange={event => setPassword(event.target.value)}
         required
       />
 
@@ -214,9 +288,9 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           Forgot password?
         </Link>
       </div>
-      <Button type="submit" className="w-full" disabled={loading || !turnstileToken}>
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-        {loading ? "Signing in..." : "Login"}
+      <Button type="submit" className="w-full" disabled={loginDisabled}>
+        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+        {isSubmitting ? "Signing in..." : "Login"}
       </Button>
 
       <p className="text-center text-sm text-slate-400">
