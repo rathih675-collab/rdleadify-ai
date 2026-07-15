@@ -16,15 +16,81 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileGeneration, setTurnstileGeneration] = useState(0);
   const [turnstileScriptStatus, setTurnstileScriptStatus] = useState<"loading" | "ready" | "error">("loading");
   const submittingRef = useRef(false);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const siteKeyPresent = Boolean(TURNSTILE_SITE_KEY);
     console.info("[turnstile] client configuration", { siteKeyPresent });
     if (!siteKeyPresent) setError(TURNSTILE_CONFIGURATION_ERROR);
   }, []);
+
+  useEffect(() => {
+    if (turnstileScriptStatus !== "ready") return;
+
+    const turnstile = window.turnstile;
+    const container = turnstileContainerRef.current;
+    if (!turnstile || !container) return;
+
+    let disposed = false;
+    let widgetId: string | undefined;
+    const requestAnotherToken = () => {
+      if (disposed || !widgetId) return;
+      setTurnstileToken("");
+      turnstile.reset(widgetId);
+      turnstile.execute(widgetId);
+    };
+
+    setTurnstileToken("");
+    try {
+      widgetId = turnstile.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        size: "invisible",
+        execution: "execute",
+        action: "login",
+        callback: token => {
+          if (disposed) return;
+          setTurnstileToken(token);
+          console.info("[turnstile] token ready", { tokenPresent: Boolean(token) });
+        },
+        "expired-callback": requestAnotherToken,
+        "error-callback": errorCode => {
+          console.error("[turnstile] challenge error", { errorCode });
+          setError("Security verification failed. Please try again.");
+          requestAnotherToken();
+          return true;
+        },
+        "timeout-callback": requestAnotherToken,
+      });
+      turnstileWidgetIdRef.current = widgetId;
+      turnstile.execute(widgetId);
+    } catch {
+      setTurnstileToken("");
+      setTurnstileScriptStatus("error");
+      setError("Security verification could not start. Please refresh and try again.");
+    }
+
+    return () => {
+      disposed = true;
+      if (widgetId) {
+        try {
+          turnstile.remove(widgetId);
+        } catch {
+          // Widget cleanup must not interrupt navigation or retries.
+        }
+      }
+      if (turnstileWidgetIdRef.current === widgetId) turnstileWidgetIdRef.current = null;
+    };
+  }, [turnstileGeneration, turnstileScriptStatus]);
+
+  function requestFreshTurnstileToken() {
+    setTurnstileToken("");
+    setTurnstileGeneration(current => current + 1);
+  }
 
   async function readResponse(response: Response) {
     const text = await response.text();
@@ -35,63 +101,6 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
     } catch {
       return { success: false, error: "The login service returned an invalid response. Please try again." };
     }
-  }
-
-  async function getTurnstileToken(signal: AbortSignal) {
-    return new Promise<string>((resolve, reject) => {
-      const turnstile = window.turnstile;
-      const container = turnstileContainerRef.current;
-      if (!turnstile || turnstileScriptStatus !== "ready") {
-        reject(new Error("Captcha is still loading. Please try again."));
-        return;
-      }
-      if (signal.aborted) {
-        reject(new DOMException("Aborted", "AbortError"));
-        return;
-      }
-      if (!container) {
-        reject(new Error("Captcha could not start. Please try again."));
-        return;
-      }
-      let widgetId: string | undefined;
-      let settled = false;
-      const cleanup = () => {
-        try {
-          if (widgetId) turnstile.remove(widgetId);
-        } catch {
-          // Cleanup must never prevent the login promise from settling.
-        }
-        signal.removeEventListener("abort", aborted);
-      };
-      const fail = (error: Error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-      const aborted = () => fail(new DOMException("Aborted", "AbortError"));
-      signal.addEventListener("abort", aborted, { once: true });
-      try {
-        widgetId = turnstile.render(container, {
-          sitekey: TURNSTILE_SITE_KEY,
-          size: "invisible",
-          execution: "execute",
-          action: "login",
-          callback: token => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve(token);
-          },
-          "error-callback": () => fail(new Error("Security verification failed. Please try again.")),
-          "timeout-callback": () => fail(new Error("Security verification timed out. Please try again.")),
-        });
-        if (!widgetId) throw new Error("Security verification could not start. Please try again.");
-        turnstile.execute(widgetId);
-      } catch {
-        fail(new Error("Security verification could not start. Please try again."));
-      }
-    });
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -107,49 +116,43 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         : "Captcha is still loading. Please try again.");
       return;
     }
+    if (!turnstileToken) {
+      setError("Complete security verification before logging in.");
+      return;
+    }
     console.info("[login] submit started");
     submittingRef.current = true;
     setError("");
     setLoading(true);
+    const tokenForAttempt = turnstileToken;
+    setTurnstileToken("");
     const requestController = new AbortController();
-    const captchaController = new AbortController();
     let requestTimedOut = false;
-    let captchaTimedOut = false;
-    const abortCaptcha = () => captchaController.abort();
-    requestController.signal.addEventListener("abort", abortCaptcha, { once: true });
+    let loginSucceeded = false;
     const requestTimeout = window.setTimeout(() => {
       requestTimedOut = true;
       requestController.abort();
     }, 15_000);
-    const captchaTimeout = window.setTimeout(() => {
-      captchaTimedOut = true;
-      captchaController.abort();
-    }, 8_000);
     try {
       const form = new FormData(event.currentTarget);
-      const captchaToken = await getTurnstileToken(captchaController.signal);
-      window.clearTimeout(captchaTimeout);
-      console.info("[login] captcha token created");
-      console.info("[login] request sent", { endpoint: "/api/auth/login" });
-      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: form.get("email"), password: form.get("password"), rememberMe, captchaToken }) });
+      console.info("[login] request sent", { endpoint: "/api/auth/login", tokenPresent: Boolean(tokenForAttempt) });
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: form.get("email"), password: form.get("password"), rememberMe, turnstileToken: tokenForAttempt }) });
       console.info("[login] response status", { status: response.status });
       const data = await readResponse(response);
       if (!response.ok || !data.success) { setError(data.error ?? (response.status >= 500 ? "The login service is temporarily unavailable. Please try again." : "Unable to sign in.")); return; }
       const requestedNext = new URLSearchParams(window.location.search).get("next");
       const redirect = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : data.redirect ?? "/dashboard";
+      loginSucceeded = true;
       console.info("[login] redirect started", { redirect });
       window.location.assign(redirect);
     } catch (cause) {
       console.error("[login] error caught", { errorType: cause instanceof Error ? cause.name : "UnknownError" });
-      if (captchaTimedOut) setError("Captcha could not load. Please refresh and try again.");
-      else if (requestTimedOut || (cause instanceof DOMException && cause.name === "AbortError")) setError("Login request timed out. Please try again.");
+      if (requestTimedOut || (cause instanceof DOMException && cause.name === "AbortError")) setError("Login request timed out. Please try again.");
       else if (cause instanceof Error) setError(cause.message || "A network error prevented login. Please try again.");
       else setError("A network error prevented login. Please try again.");
     } finally {
-      window.clearTimeout(captchaTimeout);
       window.clearTimeout(requestTimeout);
-      requestController.signal.removeEventListener("abort", abortCaptcha);
-      captchaController.abort();
+      if (!loginSucceeded) requestFreshTurnstileToken();
       submittingRef.current = false;
       setLoading(false);
       console.info("[login] loading reset");
@@ -164,7 +167,11 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
           strategy="afterInteractive"
           onReady={() => setTurnstileScriptStatus("ready")}
-          onError={() => setTurnstileScriptStatus("error")}
+          onError={() => {
+            setTurnstileScriptStatus("error");
+            setTurnstileToken("");
+            setError("Security verification could not load. Check your connection and try again.");
+          }}
         />
       ) : null}
       {turnstileScriptStatus === "ready" ? (
@@ -207,7 +214,7 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           Forgot password?
         </Link>
       </div>
-      <Button type="submit" className="w-full" disabled={loading}>
+      <Button type="submit" className="w-full" disabled={loading || !turnstileToken}>
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
         {loading ? "Signing in..." : "Login"}
       </Button>
@@ -231,10 +238,12 @@ declare global {
         execution: "execute";
         action: string;
         callback: (token: string) => void;
-        "error-callback": () => void;
+        "expired-callback": () => void;
+        "error-callback": (errorCode?: string) => boolean;
         "timeout-callback": () => void;
       }) => string;
       execute: (id: string) => void;
+      reset: (id: string) => void;
       remove: (id: string) => void;
     };
   }

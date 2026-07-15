@@ -9,23 +9,34 @@ import { rateLimit } from "@/lib/server/rate-limit";
 import { getClientIp, getDeviceLabel, getUserAgent } from "@/lib/server/request";
 import { createOpaqueToken, hashOpaqueToken, sessionCookieOptions, signSessionToken } from "@/lib/server/tokens";
 
-type LoginBody = { email?: string; password?: string; rememberMe?: boolean; captchaToken?: string };
+type LoginBody = { email?: string; password?: string; rememberMe?: boolean; turnstileToken?: string };
 type CaptchaResult = { success?: boolean; "error-codes"?: string[]; action?: string; hostname?: string };
+const TURNSTILE_ALLOWED_HOSTNAMES = new Set(["rdleadify-ai.vercel.app", "localhost", "127.0.0.1"]);
 const json = (success: boolean, error?: string, status = 200) => NextResponse.json(success ? { success: true, redirect: "/dashboard" } : { success: false, error: error ?? "Unable to sign in." }, { status, headers: { "Cache-Control": "no-store" } });
 
-async function verifyCaptcha(token: string, ip: string, expectedHostname: string) {
+async function verifyCaptcha(token: string, ip: string, requestId: string) {
   const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
   if (!secret) throw new Error("NOT_CONFIGURED");
   if (!token) return { success: false, "error-codes": ["missing-input-response"] } as CaptchaResult;
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 8_000);
   try {
-    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: new URLSearchParams({ secret, response: token, remoteip: ip }), signal: controller.signal, cache: "no-store" });
-    if (!response.ok) throw new Error("UPSTREAM_ERROR");
+    const verificationBody = new URLSearchParams({ secret, response: token });
+    if (ip !== "unknown") verificationBody.set("remoteip", ip);
+    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: verificationBody, signal: controller.signal, cache: "no-store" });
+    authLog("turnstile verification HTTP response", { requestId, httpStatus: response.status });
     const result = await response.json() as CaptchaResult;
+    authLog("turnstile verification response", {
+      requestId,
+      success: Boolean(result.success),
+      errorCodes: result["error-codes"] ?? [],
+      action: result.action,
+      hostname: result.hostname,
+    });
+    if (!response.ok) throw new Error("UPSTREAM_ERROR");
     if (result.success && result.action !== "login") {
       return { success: false, "error-codes": ["action-mismatch"] };
     }
-    if (result.success && result.hostname?.toLowerCase() !== expectedHostname.toLowerCase()) {
+    if (result.success && !TURNSTILE_ALLOWED_HOSTNAMES.has(result.hostname?.toLowerCase() ?? "")) {
       return { success: false, "error-codes": ["hostname-mismatch"] };
     }
     return result;
@@ -39,9 +50,6 @@ export async function POST(request: NextRequest) {
     return json(success, error, status);
   };
   authLog("login request received", { requestId });
-  authLog("turnstile server configuration", {
-    secretKeyPresent: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
-  });
   try {
     let body: LoginBody;
     try { body = await request.json() as LoginBody; }
@@ -52,12 +60,18 @@ export async function POST(request: NextRequest) {
     if (
       typeof body.email !== "string" ||
       typeof body.password !== "string" ||
-      typeof body.captchaToken !== "string" ||
+      typeof body.turnstileToken !== "string" ||
       (body.rememberMe !== undefined && typeof body.rememberMe !== "boolean")
     ) {
       authLog("request body validation failed", { requestId, reason: "invalid_fields" });
       return respond(false, "Invalid login request. Please try again.", 400);
     }
+    const { turnstileToken } = body;
+    authLog("turnstile request configuration", {
+      requestId,
+      tokenPresent: Boolean(turnstileToken),
+      secretPresent: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
+    });
     authLog("request body validated", { requestId });
     const ip = getClientIp(request); const userAgent = getUserAgent(request);
     const limit = rateLimit(`login:${ip}`, 10, 10 * 60 * 1000);
@@ -65,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     authLog("captcha verification started", { requestId });
     let captcha: CaptchaResult;
-    try { captcha = await verifyCaptcha(body.captchaToken ?? "", ip, request.nextUrl.hostname); }
+    try { captcha = await verifyCaptcha(turnstileToken, ip, requestId); }
     catch (error) { const reason = error instanceof Error ? error.message : "UNKNOWN"; authLog("captcha verification result", { requestId, success: false, reason }); return respond(false, reason === "NOT_CONFIGURED" ? "Security verification is not configured. Please contact support." : "Security verification is unavailable. Please try again.", 503); }
     authLog("captcha verification result", { requestId, success: Boolean(captcha.success), errorCodes: captcha.success ? undefined : captcha["error-codes"] });
     if (!captcha.success) return respond(false, "Security verification failed. Please try again.", 400);
