@@ -69,7 +69,7 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         callback: token => {
           if (disposed) return;
           setTurnstileToken(token);
-          console.info("[login] token generated", { tokenPresent: Boolean(token) });
+          console.info("[login] token received", { tokenPresent: Boolean(token) });
           finishTokenRequest(token);
         },
         "expired-callback": () => {
@@ -114,16 +114,14 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
     };
   }, [finishTokenRequest, turnstileScriptLoaded]);
 
-  const generateTurnstileToken = useCallback((forceFresh = false) => {
-    if (!forceFresh && turnstileToken) return Promise.resolve(turnstileToken);
-    if (tokenRequestRef.current) return tokenRequestRef.current.promise;
-
+  const requestFreshTurnstileToken = useCallback(() => {
     const turnstile = window.turnstile;
     const widgetId = turnstileWidgetIdRef.current;
     if (!turnstileReady || !turnstile || !widgetId) {
       return Promise.reject(new Error("Security verification could not load. Please refresh and try again."));
     }
 
+    finishTokenRequest(undefined, new Error("Security verification was restarted. Please try again."));
     setTurnstileToken("");
     let resolveToken!: (token: string) => void;
     let rejectToken!: (error: Error) => void;
@@ -138,20 +136,25 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
 
     try {
       turnstile.reset(widgetId);
+      console.info("[login] turnstile execution started");
       turnstile.execute(widgetId);
     } catch {
       finishTokenRequest(undefined, new Error("Security verification could not start. Please refresh and try again."));
     }
     return promise;
-  }, [finishTokenRequest, turnstileReady, turnstileToken]);
+  }, [finishTokenRequest, turnstileReady]);
 
-  const requestFreshTurnstileToken = useCallback(() => {
-    void generateTurnstileToken(true).catch(cause => {
-      console.error("[turnstile] fresh token request failed", {
-        errorType: cause instanceof Error ? cause.name : "UnknownError",
-      });
-    });
-  }, [generateTurnstileToken]);
+  const resetTurnstile = useCallback(() => {
+    setTurnstileToken("");
+    const turnstile = window.turnstile;
+    const widgetId = turnstileWidgetIdRef.current;
+    if (!turnstile || !widgetId) return;
+    try {
+      turnstile.reset(widgetId);
+    } catch {
+      console.error("[turnstile] widget reset failed");
+    }
+  }, []);
 
   async function readResponse(response: Response) {
     const text = await response.text();
@@ -163,9 +166,9 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
     }
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    console.info("[login] button clicked");
+    console.info("[login] form submitted");
     if (submittingRef.current) return;
     if (!email.trim() || !password) return;
     if (!siteKeyPresent) {
@@ -188,23 +191,21 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
     let requestController: AbortController | null = null;
     let requestTimeout: number | null = null;
     let requestTimedOut = false;
-    let loginSucceeded = false;
     try {
-      const tokenForAttempt = turnstileToken || await generateTurnstileToken();
+      const tokenForAttempt = await requestFreshTurnstileToken();
       setTurnstileToken("");
       requestController = new AbortController();
       requestTimeout = window.setTimeout(() => {
         requestTimedOut = true;
         requestController?.abort();
       }, 15_000);
-      console.info("[login] request sent", { endpoint: "/api/auth/login", tokenPresent: Boolean(tokenForAttempt) });
+      console.info("[login] request started", { endpoint: "/api/auth/login", tokenPresent: Boolean(tokenForAttempt) });
       const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, signal: requestController.signal, body: JSON.stringify({ email: email.trim(), password, rememberMe, turnstileToken: tokenForAttempt }) });
       console.info("[login] response received", { status: response.status });
       const data = await readResponse(response);
       if (!response.ok || !data.success) { setError(data.error ?? (response.status >= 500 ? "The login service is temporarily unavailable. Please try again." : "Unable to sign in.")); return; }
       const requestedNext = new URLSearchParams(window.location.search).get("next");
       const redirect = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : data.redirect ?? "/dashboard";
-      loginSucceeded = true;
       console.info("[login] redirect started", { redirect });
       window.location.assign(redirect);
     } catch (cause) {
@@ -214,18 +215,25 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
       else setError("A network error prevented login. Please try again.");
     } finally {
       if (requestTimeout !== null) window.clearTimeout(requestTimeout);
-      if (!loginSucceeded) requestFreshTurnstileToken();
+      requestTimeout = null;
+      requestController?.abort();
+      requestController = null;
+      finishTokenRequest(undefined, new Error("Security verification request finished."));
+      resetTurnstile();
       submittingRef.current = false;
       setIsSubmitting(false);
-      console.info("[login] loading reset");
+      console.info("[login] finally executed");
     }
   }
 
-  const turnstileLoading = siteKeyPresent && !turnstileReady && !turnstileLoadFailed;
-  const loginDisabled = isSubmitting || !email.trim() || !password || turnstileLoading;
+  const loginDisabled = !email.trim() || !password || isSubmitting;
+
+  useEffect(() => {
+    console.info("[login] button disabled state", { disabled: loginDisabled });
+  }, [loginDisabled]);
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <>
       {TURNSTILE_SITE_KEY ? (
         <Script
           id="cloudflare-turnstile"
@@ -240,66 +248,74 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
           }}
         />
       ) : null}
-      {siteKeyPresent ? <div ref={turnstileContainerRef} hidden aria-hidden="true" /> : null}
-      <div>
-        <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
-          Welcome back
-        </p>
-        <h1 className="mt-2 text-2xl font-bold text-white">Login to RDLeadify AI</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          Access your CRM workspace with a secure session.
-        </p>
-      </div>
-
-      {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
-      {successMessage ? (
-        <AuthNotice tone="success">{successMessage}</AuthNotice>
+      {siteKeyPresent ? (
+        <div
+          ref={turnstileContainerRef}
+          className="pointer-events-none fixed left-[-9999px] top-0 h-0 w-0 overflow-hidden"
+          aria-hidden="true"
+        />
       ) : null}
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
+            Welcome back
+          </p>
+          <h1 className="mt-2 text-2xl font-bold text-white">Login to RDLeadify AI</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Access your CRM workspace with a secure session.
+          </p>
+        </div>
 
-      <Field
-        label="Email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        value={email}
-        onChange={event => setEmail(event.target.value)}
-        required
-      />
-      <PasswordField
-        label="Password"
-        name="password"
-        autoComplete="current-password"
-        value={password}
-        onChange={event => setPassword(event.target.value)}
-        required
-      />
+        {error ? <AuthNotice tone="error">{error}</AuthNotice> : null}
+        {successMessage ? (
+          <AuthNotice tone="success">{successMessage}</AuthNotice>
+        ) : null}
 
-      <div className="flex items-center justify-between gap-4 text-sm">
-        <label className="flex items-center gap-2 text-slate-300">
-          <input
-            type="checkbox"
-            checked={rememberMe}
-            onChange={(event) => setRememberMe(event.target.checked)}
-            className="h-4 w-4 rounded border-white/20 bg-white/10 accent-emerald-400"
-          />
-          Remember me
-        </label>
-        <Link href="/forgot-password" className="font-medium text-emerald-300 hover:text-emerald-200">
-          Forgot password?
-        </Link>
-      </div>
-      <Button type="submit" className="w-full" disabled={loginDisabled}>
-        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-        {isSubmitting ? "Signing in..." : "Login"}
-      </Button>
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={event => setEmail(event.target.value)}
+          required
+        />
+        <PasswordField
+          label="Password"
+          name="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={event => setPassword(event.target.value)}
+          required
+        />
 
-      <p className="text-center text-sm text-slate-400">
-        New to RDLeadify AI?{" "}
-        <Link href="/register" className="font-medium text-emerald-300 hover:text-emerald-200">
-          Create account
-        </Link>
-      </p>
-    </form>
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <label className="flex items-center gap-2 text-slate-300">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="h-4 w-4 rounded border-white/20 bg-white/10 accent-emerald-400"
+            />
+            Remember me
+          </label>
+          <Link href="/forgot-password" className="font-medium text-emerald-300 hover:text-emerald-200">
+            Forgot password?
+          </Link>
+        </div>
+        <Button type="submit" className="w-full" disabled={loginDisabled}>
+          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+          {isSubmitting ? "Signing in..." : "Login"}
+        </Button>
+
+        <p className="text-center text-sm text-slate-400">
+          New to RDLeadify AI?{" "}
+          <Link href="/register" className="font-medium text-emerald-300 hover:text-emerald-200">
+            Create account
+          </Link>
+        </p>
+      </form>
+    </>
   );
 }
 
