@@ -1,17 +1,30 @@
 "use client";
 
 import Link from "next/link";
+import Script from "next/script";
 import { Loader2, LogIn } from "lucide-react";
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { AuthNotice, Field, PasswordField } from "@/components/auth/AuthFields";
 import { Button } from "@/components/ui/button";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "";
+const TURNSTILE_CONFIGURATION_ERROR =
+  "Security verification is not configured. Please contact support.";
 
 export default function LoginForm({ successMessage = "" }: { successMessage?: string }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [turnstileScriptStatus, setTurnstileScriptStatus] = useState<"loading" | "ready" | "error">("loading");
   const submittingRef = useRef(false);
+  const turnstileContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const siteKeyPresent = Boolean(TURNSTILE_SITE_KEY);
+    console.info("[turnstile] client configuration", { siteKeyPresent });
+    if (!siteKeyPresent) setError(TURNSTILE_CONFIGURATION_ERROR);
+  }, []);
 
   async function readResponse(response: Response) {
     const text = await response.text();
@@ -25,14 +38,10 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   }
 
   async function getTurnstileToken(signal: AbortSignal) {
-    const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-    if (!siteKey) {
-      throw new Error("Security verification is not configured. Please contact support.");
-    }
-    await loadTurnstileScript(signal);
     return new Promise<string>((resolve, reject) => {
       const turnstile = window.turnstile;
-      if (!turnstile) {
+      const container = turnstileContainerRef.current;
+      if (!turnstile || turnstileScriptStatus !== "ready") {
         reject(new Error("Captcha is still loading. Please try again."));
         return;
       }
@@ -40,14 +49,10 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         reject(new DOMException("Aborted", "AbortError"));
         return;
       }
-      const containerRoot = document.body;
-      if (!containerRoot) {
+      if (!container) {
         reject(new Error("Captcha could not start. Please try again."));
         return;
       }
-      const container = document.createElement("div");
-      container.hidden = true;
-      containerRoot.appendChild(container);
       let widgetId: string | undefined;
       let settled = false;
       const cleanup = () => {
@@ -56,7 +61,6 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
         } catch {
           // Cleanup must never prevent the login promise from settling.
         }
-        container.remove();
         signal.removeEventListener("abort", aborted);
       };
       const fail = (error: Error) => {
@@ -69,8 +73,10 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
       signal.addEventListener("abort", aborted, { once: true });
       try {
         widgetId = turnstile.render(container, {
-          sitekey: siteKey,
+          sitekey: TURNSTILE_SITE_KEY,
           size: "invisible",
+          execution: "execute",
+          action: "login",
           callback: token => {
             if (settled) return;
             settled = true;
@@ -91,6 +97,16 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submittingRef.current) return;
+    if (!TURNSTILE_SITE_KEY) {
+      setError(TURNSTILE_CONFIGURATION_ERROR);
+      return;
+    }
+    if (turnstileScriptStatus !== "ready" || !window.turnstile) {
+      setError(turnstileScriptStatus === "error"
+        ? "Security verification could not load. Check your connection and try again."
+        : "Captcha is still loading. Please try again.");
+      return;
+    }
     console.info("[login] submit started");
     submittingRef.current = true;
     setError("");
@@ -142,6 +158,18 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
+      {TURNSTILE_SITE_KEY ? (
+        <Script
+          id="cloudflare-turnstile"
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+          onReady={() => setTurnstileScriptStatus("ready")}
+          onError={() => setTurnstileScriptStatus("error")}
+        />
+      ) : null}
+      {turnstileScriptStatus === "ready" ? (
+        <div ref={turnstileContainerRef} hidden aria-hidden="true" />
+      ) : null}
       <div>
         <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
           Welcome back
@@ -194,44 +222,20 @@ export default function LoginForm({ successMessage = "" }: { successMessage?: st
   );
 }
 
-declare global { interface Window { turnstile?: { render: (container: HTMLElement, options: { sitekey: string; size: "invisible"; callback: (token: string) => void; "error-callback": () => void; "timeout-callback": () => void }) => string; execute: (id: string) => void; remove: (id: string) => void } } }
-let turnstileScriptPromise: Promise<void> | null = null;
-function loadTurnstileScript(signal: AbortSignal) {
-  if (window.turnstile) return Promise.resolve();
-  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
-  if (!turnstileScriptPromise) {
-    turnstileScriptPromise = new Promise((resolve, reject) => {
-      const existing = document.querySelector<HTMLScriptElement>('script[data-rdleadify-turnstile]');
-      const script = existing ?? document.createElement("script");
-      const timeout = window.setTimeout(() => {
-        failed(new Error("Captcha took too long to load. Please try again."));
-      }, 10_000);
-      const loaded = () => {
-        window.clearTimeout(timeout);
-        if (window.turnstile) resolve();
-        else failed(new Error("Captcha is still loading. Please try again."));
-      };
-      const failed = (error: Error = new Error("Security verification could not load. Check your connection and try again.")) => {
-        window.clearTimeout(timeout);
-        turnstileScriptPromise = null;
-        reject(error);
-      };
-      script.addEventListener("load", loaded, { once: true });
-      script.addEventListener("error", () => failed(), { once: true });
-      if (!existing) {
-        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-        script.async = true;
-        script.defer = true;
-        script.dataset.rdleadifyTurnstile = "true";
-        document.head.appendChild(script);
-      } else if (window.turnstile) {
-        loaded();
-      }
-    });
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (container: HTMLElement, options: {
+        sitekey: string;
+        size: "invisible";
+        execution: "execute";
+        action: string;
+        callback: (token: string) => void;
+        "error-callback": () => void;
+        "timeout-callback": () => void;
+      }) => string;
+      execute: (id: string) => void;
+      remove: (id: string) => void;
+    };
   }
-  return new Promise<void>((resolve, reject) => {
-    const aborted = () => reject(new DOMException("Aborted", "AbortError"));
-    signal.addEventListener("abort", aborted, { once: true });
-    turnstileScriptPromise!.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
-  });
 }
